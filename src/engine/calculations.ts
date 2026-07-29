@@ -103,6 +103,7 @@ export function createDefaultQuarters(
       year,
       quarter,
       trucksPerDay: ramp.trucks,
+      dailyQuantityKg: ramp.trucks * production.kgPerTruckFill,
       operatingDays: ramp.days,
       pricePerKg: ramp.price,
       annualExpenses: ramp.expenses,
@@ -116,6 +117,21 @@ export function findQuarterInput(
   quarter: number,
 ): QuarterInput | undefined {
   return quarters.find((q) => q.year === year && q.quarter === quarter);
+}
+
+/**
+ * The daily H2 volume (kg/day) actually used in the revenue/COGS math for a
+ * quarter, resolved per the scenario's offtake mode: derived from
+ * trucksPerDay × kgPerTruckFill for truck-delivered offtake, or read
+ * directly for a fixed-volume offtake agreement (e.g. a datacentre).
+ */
+export function quarterDailyKg(
+  input: QuarterInput,
+  production: ProductionSettings,
+): number {
+  return production.offtakeMode === 'direct'
+    ? input.dailyQuantityKg
+    : input.trucksPerDay * production.kgPerTruckFill;
 }
 
 /** First quarter (in the full 20-quarter timeline) in which the ITC is received. */
@@ -166,6 +182,7 @@ export function computeQuarterlyModel(
     let quarterlyExpenses = 0;
     let annualExpensesBudget = 0;
     let trucksPerDay = 0;
+    let dailyQuantityKg = 0;
     let operatingDays = 0;
     let pricePerKg = 0;
 
@@ -178,12 +195,9 @@ export function computeQuarterlyModel(
         operatingDays = input.operatingDays;
         pricePerKg = input.pricePerKg;
         annualExpensesBudget = input.annualExpenses;
-        revenue = trucksPerDay * production.kgPerTruckFill * pricePerKg * operatingDays;
-        cogs =
-          production.h2ProductionCostPerKg *
-          trucksPerDay *
-          production.kgPerTruckFill *
-          operatingDays;
+        dailyQuantityKg = quarterDailyKg(input, production);
+        revenue = dailyQuantityKg * pricePerKg * operatingDays;
+        cogs = production.h2ProductionCostPerKg * dailyQuantityKg * operatingDays;
         quarterlyExpenses = annualExpensesBudget / 4;
       }
     }
@@ -222,6 +236,7 @@ export function computeQuarterlyModel(
       isConstruction,
       isITCQuarter,
       trucksPerDay,
+      dailyQuantityKg,
       operatingDays,
       pricePerKg,
       revenue,
@@ -486,26 +501,38 @@ export function calculateDSRAmount(scenario: Scenario): number {
   return monthlyDebtService * construction.debtServiceReserveMonths;
 }
 
-export function computeMaxDailyCapacityKg(
-  production: ProductionSettings,
-  maxTrucksPerDay = 12.5,
-): number {
-  return maxTrucksPerDay * production.kgPerTruckFill;
+/** Plant nameplate capacity — a direct input, independent of offtake mode. */
+export function computeMaxDailyCapacityKg(production: ProductionSettings): number {
+  return production.maxDailyCapacityKg;
 }
 
-/** Break-even $/kg price at a reference fleet size (10 trucks/day), assuming default operating days. */
+/**
+ * Break-even $/kg at a reference daily volume. Defaults to the scenario's
+ * own average daily volume (mode-aware: trucks × kgPerTruckFill, or the
+ * direct daily quantity) and average operating days, so it stays meaningful
+ * for both truck-delivered and fixed-volume (e.g. datacentre) offtake.
+ */
 export function computeBreakEvenPricePerKg(
   scenario: Scenario,
-  trucksPerDay = 10,
-  operatingDays = 84,
+  referenceDailyKg?: number,
+  operatingDays?: number,
 ): number {
-  const { production } = scenario;
-  const quarterlyKg = trucksPerDay * production.kgPerTruckFill * operatingDays;
+  const { production, quarters } = scenario;
+  const avgDailyKg =
+    referenceDailyKg ??
+    (quarters.length > 0
+      ? sum(quarters.map((q) => quarterDailyKg(q, production))) / quarters.length
+      : 0);
+  const avgOperatingDays =
+    operatingDays ??
+    (quarters.length > 0
+      ? sum(quarters.map((q) => q.operatingDays)) / quarters.length
+      : 84);
+  const quarterlyKg = avgDailyKg * avgOperatingDays;
   if (quarterlyKg === 0) return 0;
   const avgAnnualExpenses =
-    scenario.quarters.length > 0
-      ? sum(scenario.quarters.map((q) => q.annualExpenses)) /
-        scenario.quarters.length
+    quarters.length > 0
+      ? sum(quarters.map((q) => q.annualExpenses)) / quarters.length
       : production.year5PlusAnnualExpenses;
   const quarterlyExpenses = avgAnnualExpenses / 4;
   return production.h2ProductionCostPerKg + quarterlyExpenses / quarterlyKg;

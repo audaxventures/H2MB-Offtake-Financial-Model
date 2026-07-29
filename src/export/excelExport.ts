@@ -94,7 +94,14 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   rows.push([]);
 
   section('Production & Steady-State');
-  line('Kg per Truck Fill', scenario.production.kgPerTruckFill, '0');
+  rows.push([
+    cell('Offtake Type'),
+    cell(scenario.production.offtakeMode === 'direct' ? 'Direct Daily Volume' : 'Truck Delivery', inputStyle),
+  ]);
+  if (scenario.production.offtakeMode === 'trucks') {
+    line('Kg per Truck Fill', scenario.production.kgPerTruckFill, '0');
+  }
+  line('Max Daily Capacity (kg)', scenario.production.maxDailyCapacityKg, '0');
   line('H2 Production Cost / kg', scenario.production.h2ProductionCostPerKg, CURRENCY_FMT);
   line('Expense Escalation Rate', scenario.production.expenseEscalationRate, PERCENT_FMT);
   line('Year 5+ Price / kg', scenario.production.year5PlusPricePerKg, CURRENCY_FMT);
@@ -106,7 +113,7 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
 function buildQuarterlySheet(outputs: ModelOutputs): XLSX.WorkSheet {
   const headers = [
     'Quarter',
-    'Trucks/Day',
+    'Daily Qty (kg)',
     'Op.Days',
     '$/kg',
     'Revenue',
@@ -132,7 +139,7 @@ function buildQuarterlySheet(outputs: ModelOutputs): XLSX.WorkSheet {
         : {};
     rows.push([
       cell(q.label, rowStyle),
-      cell(q.isConstruction ? '' : q.trucksPerDay, rowStyle),
+      cell(q.isConstruction ? '' : q.dailyQuantityKg, rowStyle),
       cell(q.isConstruction ? '' : q.operatingDays, rowStyle),
       cell(q.isConstruction ? '' : q.pricePerKg, rowStyle, CURRENCY_FMT),
       cell(q.revenue, rowStyle, CURRENCY_FMT),

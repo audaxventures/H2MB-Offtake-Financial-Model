@@ -88,13 +88,34 @@ The model spans 5 years (20 quarters):
 > so that every one of the 5 years always aggregates a full 4 quarters in the Annual
 > Summary.
 
+### Offtake modes
+
+Production settings include an `offtakeMode` toggle (Assumptions Dashboard → Production
+& Steady-State → "Offtake Type") that controls how each quarter's daily H2 volume is
+resolved:
+
+- **Truck Delivery** (`'trucks'`, the original H2MB use case) — volume is derived from
+  `trucksPerDay × kgPerTruckFill`. The Quarterly Model shows a Trucks/Day slider per
+  quarter.
+- **Direct Daily Volume** (`'direct'`) — for a fixed-volume offtake agreement with a
+  stationary customer (e.g. a datacentre buying a flat daily kg quantity at a
+  negotiated $/kg). The Quarterly Model shows a Daily Quantity (kg) slider per
+  quarter instead, and `kgPerTruckFill` no longer applies.
+
+Both modes share the same `operatingDays`, `pricePerKg`, and `annualExpenses` inputs,
+and resolve to a single `dailyQuantityKg` figure per quarter (see `quarterDailyKg()` in
+`calculations.ts`) that feeds the same Revenue/COGS math either way. Switching modes on
+an existing scenario doesn't lose data — the direct-volume field is kept in sync with
+the truck-derived volume until you edit it directly. Plant capacity
+(`maxDailyCapacityKg`) is a direct input independent of offtake mode.
+
 ### Per-quarter formulas
 
-For every revenue quarter:
+For every revenue quarter (`dailyKg` resolved per the offtake mode above):
 
 ```
-Revenue          = trucksPerDay × kgPerTruckFill × pricePerKg × operatingDays
-COGS             = h2ProductionCostPerKg × trucksPerDay × kgPerTruckFill × operatingDays
+Revenue          = dailyKg × pricePerKg × operatingDays
+COGS             = h2ProductionCostPerKg × dailyKg × operatingDays
 Gross Profit     = Revenue − COGS
 Quarterly Exp.   = annualExpenses ÷ 4          (expenses are set at the year level)
 EBITDA           = Gross Profit − Quarterly Expenses
@@ -176,6 +197,14 @@ deleting them, and a side-by-side comparison table (color-tinted by name: scenar
 named "bear"/"base"/"bull" get red/green/blue tints respectively) across the key
 metrics. Scenarios and the in-progress current scenario persist to `localStorage`
 across page refreshes.
+
+> **Persistence note:** all state lives in the browser's `localStorage`, scoped to the
+> page's origin — it survives refreshes and closing/reopening the tab on that same
+> URL, but a *different* URL (a new preview link, a different port, a new deploy
+> domain) is a different origin with its own empty storage. `crypto.randomUUID()` also
+> requires a secure context (HTTPS or `localhost`); scenario ID generation
+> (`src/lib/id.ts`) falls back to a non-cryptographic UUID so plain-HTTP preview URLs
+> (common for forwarded dev-container ports) don't throw during store initialization.
 
 ## Export
 

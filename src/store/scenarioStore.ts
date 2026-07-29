@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import { createDefaultScenario } from '@/engine/defaults';
+import { createDefaultScenario, DEFAULT_PRODUCTION } from '@/engine/defaults';
+import { generateId } from '@/lib/id';
 import type {
   CapitalStructure,
   ConstructionCosts,
@@ -17,13 +18,35 @@ export const MAX_COMPARE_SCENARIOS = 3;
 function cloneScenario(scenario: Scenario): Scenario {
   return {
     ...scenario,
-    id: crypto.randomUUID(),
+    id: generateId(),
     createdAt: new Date(),
     capital: { ...scenario.capital },
     construction: { ...scenario.construction },
     itc: { ...scenario.itc },
     production: { ...scenario.production },
     quarters: scenario.quarters.map((q) => ({ ...q })),
+  };
+}
+
+/**
+ * Backfills fields added in later releases (e.g. offtakeMode,
+ * maxDailyCapacityKg, dailyQuantityKg) onto scenarios that were persisted to
+ * localStorage before those fields existed, so older saved data keeps
+ * working instead of producing NaNs or getting silently discarded.
+ */
+function migrateScenario(scenario: Scenario): Scenario {
+  const production: ProductionSettings = {
+    ...DEFAULT_PRODUCTION,
+    ...scenario.production,
+  };
+  return {
+    ...scenario,
+    createdAt: new Date(scenario.createdAt),
+    production,
+    quarters: scenario.quarters.map((q) => ({
+      ...q,
+      dailyQuantityKg: q.dailyQuantityKg ?? q.trucksPerDay * production.kgPerTruckFill,
+    })),
   };
 }
 
@@ -145,7 +168,7 @@ export const useScenarioStore = create<ScenarioStoreState>()(
 
         const toSave: Scenario = {
           ...current,
-          id: crypto.randomUUID(),
+          id: generateId(),
           createdAt: new Date(),
           name: resolvedName,
         };
@@ -209,16 +232,20 @@ export const useScenarioStore = create<ScenarioStoreState>()(
     }),
     {
       name: 'h2mb-scenario-store',
-      onRehydrateStorage: () => (state) => {
+      onRehydrateStorage: () => (state, error) => {
+        if (error) {
+          // Corrupt/unreadable persisted state must never crash the app or
+          // silently wipe the in-memory default — just log and continue.
+          console.error('Failed to rehydrate scenario store from localStorage:', error);
+          return;
+        }
         if (!state) return;
-        state.current = {
-          ...state.current,
-          createdAt: new Date(state.current.createdAt),
-        };
-        state.savedScenarios = state.savedScenarios.map((s) => ({
-          ...s,
-          createdAt: new Date(s.createdAt),
-        }));
+        try {
+          state.current = migrateScenario(state.current);
+          state.savedScenarios = state.savedScenarios.map(migrateScenario);
+        } catch (e) {
+          console.error('Failed to migrate persisted scenarios:', e);
+        }
       },
     },
   ),

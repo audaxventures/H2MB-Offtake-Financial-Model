@@ -1,4 +1,5 @@
 import { createDefaultQuarters } from './calculations';
+import { generateId } from '../lib/id';
 import type {
   CapitalStructure,
   ConstructionCosts,
@@ -34,7 +35,9 @@ export const DEFAULT_ITC: ITCSettings = {
 };
 
 export const DEFAULT_PRODUCTION: ProductionSettings = {
+  offtakeMode: 'trucks',
   kgPerTruckFill: 80,
+  maxDailyCapacityKg: 1_000,
   h2ProductionCostPerKg: 2.41,
   expenseEscalationRate: 0.025,
   year5PlusPricePerKg: 12.0,
@@ -43,7 +46,7 @@ export const DEFAULT_PRODUCTION: ProductionSettings = {
 
 export function createDefaultScenario(name = 'Base Case'): Scenario {
   return {
-    id: crypto.randomUUID(),
+    id: generateId(),
     name,
     createdAt: new Date(),
     capital: { ...DEFAULT_CAPITAL },

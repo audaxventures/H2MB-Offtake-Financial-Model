@@ -25,7 +25,7 @@ import {
   formatPercent,
 } from '@/engine/formatters';
 import { useScenarioStore } from '@/store/scenarioStore';
-import type { ITCApplication } from '@/engine/types';
+import type { ITCApplication, OfftakeMode } from '@/engine/types';
 
 export function AssumptionsDashboard() {
   const current = useScenarioStore((s) => s.current);
@@ -287,14 +287,45 @@ export function AssumptionsDashboard() {
             <CardTitle>Production &amp; Steady-State</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4">
+            <div className="grid gap-1.5">
+              <Label className="text-muted-foreground">Offtake Type</Label>
+              <Select
+                value={production.offtakeMode}
+                onValueChange={(v) => updateProduction({ offtakeMode: v as OfftakeMode })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="trucks">Truck Delivery (Class 8 FCET)</SelectItem>
+                  <SelectItem value="direct">Direct Daily Volume (e.g. datacentre)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">
+                {production.offtakeMode === 'trucks'
+                  ? 'Volume is derived from Trucks/Day × Kg per Truck Fill on the Quarterly Model.'
+                  : 'Volume is a direct daily kg quantity set per quarter on the Quarterly Model.'}
+              </p>
+            </div>
+            {production.offtakeMode === 'trucks' && (
+              <SliderInput
+                label="Kg per Truck Fill"
+                value={production.kgPerTruckFill}
+                onChange={(v) => updateProduction({ kgPerTruckFill: v })}
+                min={40}
+                max={120}
+                step={5}
+                suffix=" kg"
+              />
+            )}
             <SliderInput
-              label="Kg per Truck Fill"
-              value={production.kgPerTruckFill}
-              onChange={(v) => updateProduction({ kgPerTruckFill: v })}
-              min={40}
-              max={120}
-              step={5}
-              suffix=" kg"
+              label="Max Daily Capacity"
+              value={production.maxDailyCapacityKg}
+              onChange={(v) => updateProduction({ maxDailyCapacityKg: v })}
+              min={100}
+              max={5_000}
+              step={50}
+              suffix=" kg/day"
             />
             <SliderInput
               label="H2 Production Cost / kg"
@@ -335,7 +366,7 @@ export function AssumptionsDashboard() {
 
             <div className="bg-muted/50 grid grid-cols-1 gap-y-1.5 rounded-lg p-3 text-sm">
               <StatRow label="Max Daily Capacity" value={`${formatCurrencyForKg(maxCapacityKg)} kg`} />
-              <StatRow label="Break-even $/kg @ 10 trucks" value={formatCurrency(breakEvenPrice, 2)} />
+              <StatRow label="Break-even $/kg (avg. volume)" value={formatCurrency(breakEvenPrice, 2)} />
             </div>
           </CardContent>
         </Card>

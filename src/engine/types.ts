@@ -26,17 +26,28 @@ export interface ITCSettings {
   appliedTo: ITCApplication;
 }
 
+/**
+ * 'trucks': volume is derived from trucksPerDay × kgPerTruckFill (Class 8 FCET
+ * offtake, the original H2MB use case).
+ * 'direct': volume is a directly-entered daily quantity (e.g. a fixed-volume
+ * offtake agreement with a datacentre or other stationary customer).
+ */
+export type OfftakeMode = 'trucks' | 'direct';
+
 export interface QuarterInput {
   year: number;
   quarter: number;
   trucksPerDay: number;
+  dailyQuantityKg: number;
   operatingDays: number;
   pricePerKg: number;
   annualExpenses: number;
 }
 
 export interface ProductionSettings {
+  offtakeMode: OfftakeMode;
   kgPerTruckFill: number;
+  maxDailyCapacityKg: number;
   h2ProductionCostPerKg: number;
   expenseEscalationRate: number;
   year5PlusPricePerKg: number;
@@ -62,6 +73,7 @@ export interface QuarterResult {
   isConstruction: boolean;
   isITCQuarter: boolean;
   trucksPerDay: number;
+  dailyQuantityKg: number;
   operatingDays: number;
   pricePerKg: number;
   revenue: number;

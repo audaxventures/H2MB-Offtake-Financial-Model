@@ -17,6 +17,7 @@ import {
   computeSourcesAndUses,
   findITCQuarterIndex,
   isConstructionQuarter,
+  quarterDailyKg,
   quarterLabel,
   runModel,
   solveIRR,
@@ -427,16 +428,69 @@ describe('computeDebtPayoffQuarter', () => {
   });
 });
 
-describe('production helpers', () => {
-  it('computes max daily capacity as trucks x kg/fill', () => {
+describe('offtake mode: trucks vs. direct daily volume', () => {
+  it('defaults to truck-delivered offtake, deriving daily kg from trucks x kgPerTruckFill', () => {
     const scenario = createDefaultScenario();
-    const capacity = computeMaxDailyCapacityKg(scenario.production, 12.5);
-    expect(capacity).toBe(12.5 * scenario.production.kgPerTruckFill);
+    expect(scenario.production.offtakeMode).toBe('trucks');
+    const input = scenario.quarters[0];
+    expect(quarterDailyKg(input, scenario.production)).toBe(
+      input.trucksPerDay * scenario.production.kgPerTruckFill,
+    );
+  });
+
+  it('uses the direct daily quantity (ignoring trucksPerDay) once switched to direct offtake', () => {
+    const scenario = createDefaultScenario();
+    scenario.production.offtakeMode = 'direct';
+    scenario.quarters = scenario.quarters.map((q) => ({
+      ...q,
+      trucksPerDay: 999, // should be fully ignored in direct mode
+      dailyQuantityKg: 500,
+    }));
+
+    const input = scenario.quarters[0];
+    expect(quarterDailyKg(input, scenario.production)).toBe(500);
+
+    const results = computeQuarterlyModel(scenario);
+    const firstRevenueQuarter = results.find((r) => !r.isConstruction)!;
+    const matchingInput = input;
+    expect(firstRevenueQuarter.revenue).toBeCloseTo(
+      500 * matchingInput.pricePerKg * matchingInput.operatingDays,
+      6,
+    );
+    expect(firstRevenueQuarter.cogs).toBeCloseTo(
+      scenario.production.h2ProductionCostPerKg * 500 * matchingInput.operatingDays,
+      6,
+    );
+  });
+
+  it('models a flat-volume datacentre offtake (e.g. 300 kg/day at a fixed price) correctly', () => {
+    const scenario = createDefaultScenario();
+    scenario.production.offtakeMode = 'direct';
+    scenario.quarters = scenario.quarters.map((q) => ({
+      ...q,
+      dailyQuantityKg: 300,
+      pricePerKg: 14,
+      operatingDays: 90,
+    }));
+
+    const results = computeQuarterlyModel(scenario);
+    for (const r of results.filter((r) => !r.isConstruction)) {
+      expect(r.revenue).toBeCloseTo(300 * 14 * 90, 6);
+      expect(r.dailyQuantityKg).toBe(300);
+    }
+  });
+});
+
+describe('production helpers', () => {
+  it('reports the plant nameplate capacity as a direct input', () => {
+    const scenario = createDefaultScenario();
+    const capacity = computeMaxDailyCapacityKg(scenario.production);
+    expect(capacity).toBe(scenario.production.maxDailyCapacityKg);
   });
 
   it('computes a break-even price per kg above the raw production cost', () => {
     const scenario = createDefaultScenario();
-    const breakEven = computeBreakEvenPricePerKg(scenario, 10, 84);
+    const breakEven = computeBreakEvenPricePerKg(scenario, 10 * scenario.production.kgPerTruckFill, 84);
     expect(breakEven).toBeGreaterThan(scenario.production.h2ProductionCostPerKg);
   });
 });

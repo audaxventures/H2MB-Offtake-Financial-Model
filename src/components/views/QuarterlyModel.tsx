@@ -22,6 +22,7 @@ export function QuarterlyModel() {
   const setYearAnnualExpenses = useScenarioStore((s) => s.setYearAnnualExpenses);
   const outputs = useModelOutputs();
 
+  const isDirectOfftake = current.production.offtakeMode === 'direct';
   const yearQuarters = current.quarters.filter((q) => q.year === selectedYear);
   const hasConstructionNote = selectedYear === 2;
   const annualExpensesForYear = yearQuarters[0]?.annualExpenses ?? 0;
@@ -61,14 +62,26 @@ export function QuarterlyModel() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="grid gap-4">
-                  <SliderInput
-                    label="Trucks / Day"
-                    value={q.trucksPerDay}
-                    onChange={(v) => updateQuarter(q.year, q.quarter, { trucksPerDay: v })}
-                    min={1}
-                    max={25}
-                    step={1}
-                  />
+                  {isDirectOfftake ? (
+                    <SliderInput
+                      label="Daily Quantity (kg)"
+                      value={q.dailyQuantityKg}
+                      onChange={(v) => updateQuarter(q.year, q.quarter, { dailyQuantityKg: v })}
+                      min={10}
+                      max={2_000}
+                      step={10}
+                      suffix=" kg"
+                    />
+                  ) : (
+                    <SliderInput
+                      label="Trucks / Day"
+                      value={q.trucksPerDay}
+                      onChange={(v) => updateQuarter(q.year, q.quarter, { trucksPerDay: v })}
+                      min={1}
+                      max={25}
+                      step={1}
+                    />
+                  )}
                   <SliderInput
                     label="Operating Days"
                     value={q.operatingDays}
@@ -76,7 +89,11 @@ export function QuarterlyModel() {
                     min={1}
                     max={92}
                     step={1}
-                    helperText="Days trucks operate this quarter"
+                    helperText={
+                      isDirectOfftake
+                        ? 'Days product is delivered this quarter'
+                        : 'Days trucks operate this quarter'
+                    }
                   />
                   <SliderInput
                     label="H2 Price $/kg"
@@ -165,10 +182,13 @@ function QuarterlyTable({
       render: (r) => (r.kind === 'quarter' ? r.data.label : `Year ${r.data.year} Total`),
     },
     {
-      key: 'trucks',
-      header: 'Trucks/Day',
+      key: 'dailyQty',
+      header: 'Daily Qty (kg)',
       align: 'right',
-      render: (r) => (r.kind === 'quarter' && !r.data.isConstruction ? r.data.trucksPerDay : '—'),
+      render: (r) =>
+        r.kind === 'quarter' && !r.data.isConstruction
+          ? r.data.dailyQuantityKg.toLocaleString('en-CA')
+          : '—',
     },
     {
       key: 'days',
