@@ -1,4 +1,4 @@
-import { Download, FileSpreadsheet, FileText, Layers, Moon, Sun } from 'lucide-react';
+import { Cloud, CloudOff, Download, FileSpreadsheet, FileText, Layers, LogOut, Moon, RefreshCw, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -6,6 +6,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import type { SyncStatus } from '@/lib/cloudSync';
+import { cn } from '@/lib/utils';
 
 interface TopNavProps {
   title: string;
@@ -14,6 +16,33 @@ interface TopNavProps {
   onOpenScenarios: () => void;
   onExportExcel: () => void;
   onExportPDF: () => void;
+  email?: string | null;
+  syncStatus?: SyncStatus;
+  onSignOut?: () => void;
+}
+
+const SYNC_LABEL: Record<SyncStatus, string> = {
+  loading: 'Loading…',
+  syncing: 'Syncing…',
+  synced: 'Synced',
+  error: 'Sync error',
+  offline: 'Offline',
+};
+
+function SyncIndicator({ status }: { status: SyncStatus }) {
+  const Icon = status === 'error' || status === 'offline' ? CloudOff : status === 'syncing' || status === 'loading' ? RefreshCw : Cloud;
+  return (
+    <span
+      className={cn(
+        'text-muted-foreground hidden items-center gap-1.5 text-xs sm:flex',
+        status === 'error' && 'text-h2mb-danger',
+      )}
+      title={SYNC_LABEL[status]}
+    >
+      <Icon className={cn('size-3.5', (status === 'syncing' || status === 'loading') && 'animate-spin')} />
+      {SYNC_LABEL[status]}
+    </span>
+  );
 }
 
 export function TopNav({
@@ -23,12 +52,17 @@ export function TopNav({
   onOpenScenarios,
   onExportExcel,
   onExportPDF,
+  email,
+  syncStatus,
+  onSignOut,
 }: TopNavProps) {
   return (
     <header className="bg-background flex h-14 shrink-0 items-center justify-between border-b px-4 sm:px-6">
       <h1 className="text-base font-semibold sm:text-lg">{title}</h1>
 
       <div className="flex items-center gap-2">
+        {syncStatus && <SyncIndicator status={syncStatus} />}
+
         <Button variant="outline" size="sm" onClick={onOpenScenarios}>
           <Layers />
           Scenarios
@@ -61,6 +95,12 @@ export function TopNav({
         >
           {darkMode ? <Sun /> : <Moon />}
         </Button>
+
+        {onSignOut && (
+          <Button variant="outline" size="icon" aria-label={email ? `Sign out (${email})` : 'Sign out'} onClick={onSignOut}>
+            <LogOut />
+          </Button>
+        )}
       </div>
     </header>
   );

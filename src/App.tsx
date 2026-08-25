@@ -9,14 +9,22 @@ import { SourcesAndUses } from '@/components/views/SourcesAndUses';
 import { ScenarioManager } from '@/components/views/ScenarioManager';
 import { PDFExportLayout } from '@/components/export/PDFExportLayout';
 import { GlobalValidationBanners } from '@/components/shared/GlobalValidationBanners';
+import { LoginScreen } from '@/components/auth/LoginScreen';
 import { useScenarioStore } from '@/store/scenarioStore';
 import { useModelOutputs } from '@/store/useModelOutputs';
+import { useAuthStore } from '@/store/authStore';
+import { useCloudSync } from '@/lib/cloudSync';
 
 function App() {
   const [activeView, setActiveView] = useState<ViewId>('assumptions');
   const [scenariosOpen, setScenariosOpen] = useState(false);
   const [isExportingPDF, setIsExportingPDF] = useState(false);
   const pdfLayoutRef = useRef<HTMLDivElement>(null);
+
+  const token = useAuthStore((s) => s.token);
+  const email = useAuthStore((s) => s.email);
+  const logout = useAuthStore((s) => s.logout);
+  const syncStatus = useCloudSync();
 
   const current = useScenarioStore((s) => s.current);
   const outputs = useModelOutputs();
@@ -40,6 +48,10 @@ function App() {
     }
   };
 
+  if (!token) {
+    return <LoginScreen />;
+  }
+
   return (
     <>
       <AppShell
@@ -49,6 +61,9 @@ function App() {
         onExportExcel={handleExportExcel}
         onExportPDF={handleExportPDF}
         bannerSlot={<GlobalValidationBanners />}
+        email={email}
+        syncStatus={syncStatus}
+        onSignOut={logout}
       >
         {activeView === 'assumptions' && <AssumptionsDashboard />}
         {activeView === 'revenue' && <RevenueStreams />}

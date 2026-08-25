@@ -2,6 +2,7 @@ import { useEffect, type ReactNode } from 'react';
 import { Sidebar, type ViewId } from './Sidebar';
 import { TopNav } from './TopNav';
 import { useScenarioStore } from '@/store/scenarioStore';
+import type { SyncStatus } from '@/lib/cloudSync';
 
 const VIEW_TITLES: Record<ViewId, string> = {
   assumptions: 'Assumptions Dashboard',
@@ -19,6 +20,9 @@ interface AppShellProps {
   onExportPDF: () => void;
   bannerSlot?: ReactNode;
   children: ReactNode;
+  email?: string | null;
+  syncStatus?: SyncStatus;
+  onSignOut?: () => void;
 }
 
 export function AppShell({
@@ -29,6 +33,9 @@ export function AppShell({
   onExportPDF,
   bannerSlot,
   children,
+  email,
+  syncStatus,
+  onSignOut,
 }: AppShellProps) {
   const darkMode = useScenarioStore((s) => s.darkMode);
   const toggleDarkMode = useScenarioStore((s) => s.toggleDarkMode);
@@ -48,6 +55,9 @@ export function AppShell({
           onOpenScenarios={onOpenScenarios}
           onExportExcel={onExportExcel}
           onExportPDF={onExportPDF}
+          email={email}
+          syncStatus={syncStatus}
+          onSignOut={onSignOut}
         />
         {bannerSlot && <div className="flex flex-col gap-2 px-4 pt-4 sm:px-6">{bannerSlot}</div>}
         <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 sm:p-6" id="model-export-root">
