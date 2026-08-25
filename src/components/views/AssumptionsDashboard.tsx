@@ -17,7 +17,7 @@ import {
   computeBreakEvenPricePerKg,
   computeDebtPayoffQuarter,
   computeMaxDailyCapacityKg,
-  quarterLabel,
+  periodLabel,
 } from '@/engine/calculations';
 import {
   formatCurrency,
@@ -25,17 +25,18 @@ import {
   formatPercent,
 } from '@/engine/formatters';
 import { useScenarioStore } from '@/store/scenarioStore';
-import type { ITCApplication, OfftakeMode } from '@/engine/types';
+import type { ITCApplication } from '@/engine/types';
 
 export function AssumptionsDashboard() {
   const current = useScenarioStore((s) => s.current);
   const updateCapital = useScenarioStore((s) => s.updateCapital);
   const updateConstruction = useScenarioStore((s) => s.updateConstruction);
   const updateITC = useScenarioStore((s) => s.updateITC);
-  const updateProduction = useScenarioStore((s) => s.updateProduction);
+  const updatePlant = useScenarioStore((s) => s.updatePlant);
+  const updateModelSettings = useScenarioStore((s) => s.updateModelSettings);
 
   const outputs = useModelOutputs();
-  const { capital, construction, itc, production } = current;
+  const { capital, construction, itc, plant, modelSettings } = current;
 
   const totalSources = outputs.sourcesAndUses.sources.total;
   const debtPct = totalSources > 0 ? capital.totalDebt / totalSources : 0;
@@ -49,13 +50,10 @@ export function AssumptionsDashboard() {
   const dsrAmount = outputs.sourcesAndUses.uses.debtServiceReserve;
 
   const payoffWithITC = useMemo(() => computeDebtPayoffQuarter(current), [current]);
-  const payoffWithoutITC = useMemo(
-    () => computeDebtPayoffQuarter(current, 0),
-    [current],
-  );
+  const payoffWithoutITC = useMemo(() => computeDebtPayoffQuarter(current, 0), [current]);
 
-  const maxCapacityKg = computeMaxDailyCapacityKg(production);
-  const breakEvenPrice = computeBreakEvenPricePerKg(current);
+  const maxCapacityKg = computeMaxDailyCapacityKg(current);
+  const breakEvenPrice = computeBreakEvenPricePerKg(outputs.periods);
 
   return (
     <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_1fr]">
@@ -116,7 +114,7 @@ export function AssumptionsDashboard() {
               value={capital.loanTenor}
               onChange={(v) => updateCapital({ loanTenor: v })}
               min={3}
-              max={20}
+              max={25}
               step={1}
               suffix=" yrs"
             />
@@ -188,10 +186,10 @@ export function AssumptionsDashboard() {
               value={construction.constructionDurationMonths}
               onChange={(v) => updateConstruction({ constructionDurationMonths: v })}
               min={6}
-              max={24}
+              max={36}
               step={1}
               suffix=" mo"
-              helperText='Model assumes Year 1 (12mo) + Y2Q1 (3mo) = 15mo'
+              helperText="Drives which leading quarters/years have zero revenue"
             />
             <SliderInput
               label="Debt Service Reserve"
@@ -240,7 +238,7 @@ export function AssumptionsDashboard() {
               value={itc.receivedInYear}
               onChange={(v) => updateITC({ receivedInYear: v })}
               min={1}
-              max={5}
+              max={modelSettings.totalYears}
               step={1}
               accent="gold"
             />
@@ -268,11 +266,11 @@ export function AssumptionsDashboard() {
               />
               <StatRow
                 label="Debt Payoff (with ITC)"
-                value={payoffWithITC ? quarterLabel(payoffWithITC.year, payoffWithITC.quarter) : 'Beyond horizon'}
+                value={payoffWithITC ? periodLabel(payoffWithITC.year, payoffWithITC.quarter) : 'Beyond horizon'}
               />
               <StatRow
                 label="Debt Payoff (without ITC)"
-                value={payoffWithoutITC ? quarterLabel(payoffWithoutITC.year, payoffWithoutITC.quarter) : 'Beyond horizon'}
+                value={payoffWithoutITC ? periodLabel(payoffWithoutITC.year, payoffWithoutITC.quarter) : 'Beyond horizon'}
               />
               <StatRow
                 label="Net Effective Debt After ITC"
@@ -284,89 +282,48 @@ export function AssumptionsDashboard() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Production &amp; Steady-State</CardTitle>
+            <CardTitle>Model Settings</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <div className="grid gap-1.5">
-              <Label className="text-muted-foreground">Offtake Type</Label>
-              <Select
-                value={production.offtakeMode}
-                onValueChange={(v) => updateProduction({ offtakeMode: v as OfftakeMode })}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="trucks">Truck Delivery (Class 8 FCET)</SelectItem>
-                  <SelectItem value="direct">Direct Daily Volume (e.g. datacentre)</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-muted-foreground text-xs">
-                {production.offtakeMode === 'trucks'
-                  ? 'Volume is derived from Trucks/Day × Kg per Truck Fill on the Quarterly Model.'
-                  : 'Volume is a direct daily kg quantity set per quarter on the Quarterly Model.'}
-              </p>
-            </div>
-            {production.offtakeMode === 'trucks' && (
-              <SliderInput
-                label="Kg per Truck Fill"
-                value={production.kgPerTruckFill}
-                onChange={(v) => updateProduction({ kgPerTruckFill: v })}
-                min={40}
-                max={120}
-                step={5}
-                suffix=" kg"
-              />
-            )}
+            <SliderInput
+              label="Model Horizon"
+              value={modelSettings.totalYears}
+              onChange={(v) => updateModelSettings({ totalYears: v })}
+              min={5}
+              max={25}
+              step={1}
+              suffix=" yrs"
+            />
+            <SliderInput
+              label="Quarterly Detail Years"
+              value={modelSettings.quarterlyYears}
+              onChange={(v) =>
+                updateModelSettings({
+                  quarterlyYears: Math.min(v, modelSettings.totalYears),
+                })
+              }
+              min={2}
+              max={modelSettings.totalYears}
+              step={1}
+              suffix=" yrs"
+              helperText="Years 1..N are modeled quarterly; the rest are annual"
+            />
             <SliderInput
               label="Max Daily Capacity"
-              value={production.maxDailyCapacityKg}
-              onChange={(v) => updateProduction({ maxDailyCapacityKg: v })}
+              value={plant.maxDailyCapacityKg}
+              onChange={(v) => updatePlant({ maxDailyCapacityKg: v })}
               min={100}
               max={5_000}
               step={50}
               suffix=" kg/day"
-            />
-            <SliderInput
-              label="H2 Production Cost / kg"
-              value={production.h2ProductionCostPerKg}
-              onChange={(v) => updateProduction({ h2ProductionCostPerKg: v })}
-              min={1}
-              max={8}
-              step={0.01}
-              formatValue={(v) => formatCurrency(v, 2)}
-            />
-            <SliderInput
-              label="Expense Escalation Rate"
-              value={production.expenseEscalationRate}
-              onChange={(v) => updateProduction({ expenseEscalationRate: v })}
-              min={0}
-              max={0.1}
-              step={0.0025}
-              formatValue={(v) => formatPercent(v, 2)}
-            />
-            <SliderInput
-              label="Year 5+ Price / kg"
-              value={production.year5PlusPricePerKg}
-              onChange={(v) => updateProduction({ year5PlusPricePerKg: v })}
-              min={5}
-              max={25}
-              step={0.25}
-              formatValue={(v) => formatCurrency(v, 2)}
-            />
-            <SliderInput
-              label="Year 5+ Annual Expenses"
-              value={production.year5PlusAnnualExpenses}
-              onChange={(v) => updateProduction({ year5PlusAnnualExpenses: v })}
-              min={200_000}
-              max={3_000_000}
-              step={25_000}
-              formatValue={(v) => formatCurrency(v)}
+              helperText="Shared plant nameplate capacity across all revenue streams"
             />
 
             <div className="bg-muted/50 grid grid-cols-1 gap-y-1.5 rounded-lg p-3 text-sm">
               <StatRow label="Max Daily Capacity" value={`${formatCurrencyForKg(maxCapacityKg)} kg`} />
               <StatRow label="Break-even $/kg (avg. volume)" value={formatCurrency(breakEvenPrice, 2)} />
+              <StatRow label="Revenue Streams" value={String(current.revenueStreams.length)} />
+              <StatRow label="Expense Line Items" value={String(current.expenseLineItems.length)} />
             </div>
           </CardContent>
         </Card>
@@ -375,8 +332,14 @@ export function AssumptionsDashboard() {
       {/* Right column: live KPIs */}
       <div className="grid grid-cols-1 gap-6 content-start">
         <div className="grid grid-cols-2 gap-3">
-          <KPICard label="Total 5-yr Revenue" value={formatCurrencyCompact(outputs.totalRevenue5yr)} />
-          <KPICard label="Net Cash (5 yr)" value={formatCurrencyCompact(outputs.totalNetCash5yr)} />
+          <KPICard
+            label={`Total ${modelSettings.totalYears}-yr Revenue`}
+            value={formatCurrencyCompact(outputs.totalRevenueAllYears)}
+          />
+          <KPICard
+            label={`Net Cash (${modelSettings.totalYears} yr)`}
+            value={formatCurrencyCompact(outputs.totalNetCashAllYears)}
+          />
           <KPICard
             label="Equity IRR"
             value={outputs.equityIRR !== null ? formatPercent(outputs.equityIRR, 1) : 'N/A'}

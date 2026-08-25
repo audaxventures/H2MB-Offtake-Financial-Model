@@ -1,26 +1,20 @@
 import type {
   AnnualResult,
+  EscalationConfig,
+  ExpenseCategory,
+  ExpenseLineItem,
   ModelOutputs,
-  ProductionSettings,
-  QuarterInput,
-  QuarterResult,
+  ModelPeriod,
+  ModelSettings,
+  PeriodResult,
+  PeriodRevenueInput,
+  RevenueStream,
   Scenario,
   SourcesAndUses,
+  StreamPeriodResult,
   ValidationResult,
 } from './types';
 
-/**
- * Model horizon: 5 years x 4 quarters = 20 quarters.
- * Construction: Y1Q1-Q4 + Y2Q1 = 5 quarters (no revenue).
- * Revenue: Y2Q2 through Y5Q4 = the remaining 15 quarters.
- *
- * Note: the product brief describes the revenue phase as "14 quarters"
- * indexed 0-13, but "Y2Q2 through Y5Q4" together with "5 years = 20
- * quarters total" and "5 construction quarters" is only internally
- * consistent at 15 revenue quarters (20 - 5 = 15). That arithmetic is
- * authoritative here so annual aggregates always cover a full 4 quarters
- * per year across all 5 years.
- */
 export const DSCR_TARGET = 1.25;
 export const DSCR_DANGER = 0.8;
 export const IRR_MIN_THRESHOLD = 0.08;
@@ -28,199 +22,261 @@ export const IRR_INVESTOR_HURDLE = 0.15;
 export const DEPRECIATION_LIFE_YEARS = 20;
 export const DEPRECIATION_SALVAGE_PCT = 0.05;
 
-export interface YearQuarter {
-  year: number;
-  quarter: number;
+export function sum(values: number[]): number {
+  return values.reduce((acc, v) => acc + v, 0);
 }
 
-export const CONSTRUCTION_QUARTERS: YearQuarter[] = [
-  { year: 1, quarter: 1 },
-  { year: 1, quarter: 2 },
-  { year: 1, quarter: 3 },
-  { year: 1, quarter: 4 },
-  { year: 2, quarter: 1 },
-];
-
-export const REVENUE_QUARTERS: YearQuarter[] = [
-  { year: 2, quarter: 2 },
-  { year: 2, quarter: 3 },
-  { year: 2, quarter: 4 },
-  { year: 3, quarter: 1 },
-  { year: 3, quarter: 2 },
-  { year: 3, quarter: 3 },
-  { year: 3, quarter: 4 },
-  { year: 4, quarter: 1 },
-  { year: 4, quarter: 2 },
-  { year: 4, quarter: 3 },
-  { year: 4, quarter: 4 },
-  { year: 5, quarter: 1 },
-  { year: 5, quarter: 2 },
-  { year: 5, quarter: 3 },
-  { year: 5, quarter: 4 },
-];
-
-export const ALL_QUARTERS: YearQuarter[] = [
-  ...CONSTRUCTION_QUARTERS,
-  ...REVENUE_QUARTERS,
-];
-
-export function quarterLabel(year: number, quarter: number): string {
-  return `Y${year}Q${quarter}`;
-}
-
-export function isConstructionQuarter(year: number, quarter: number): boolean {
-  return CONSTRUCTION_QUARTERS.some(
-    (q) => q.year === year && q.quarter === quarter,
-  );
+export function periodLabel(year: number, quarter: number | null): string {
+  return quarter === null ? `Y${year}` : `Y${year}Q${quarter}`;
 }
 
 /**
- * Default quarterly revenue assumptions: an off-take-backed ramp with an
- * elevated cost/utilization dip in Year 3 (when debt amortization begins)
- * before Year 4-5 stabilize toward the steady-state production settings.
+ * Builds the raw period timeline (no construction flag yet): quarterly
+ * periods for years 1..quarterlyYears, then one annual period per year
+ * from quarterlyYears+1..totalYears.
  */
-export function createDefaultQuarters(
-  production: ProductionSettings,
-): QuarterInput[] {
-  const rampByYear: Record<
-    number,
-    { trucks: number; days: number; price: number; expenses: number }
-  > = {
-    2: { trucks: 11, days: 92, price: 19, expenses: 850_000 },
-    3: { trucks: 10, days: 83, price: 13.5, expenses: 1_345_000 },
-    4: { trucks: 12, days: 92, price: 16, expenses: 1_050_000 },
-    5: {
-      trucks: 12,
-      days: 92,
-      price: production.year5PlusPricePerKg,
-      expenses: production.year5PlusAnnualExpenses,
-    },
-  };
+export function generatePeriods(modelSettings: ModelSettings): ModelPeriod[] {
+  const { totalYears, quarterlyYears } = modelSettings;
+  const periods: ModelPeriod[] = [];
+  let index = 0;
 
-  return REVENUE_QUARTERS.map(({ year, quarter }) => {
-    const ramp = rampByYear[year];
-    return {
+  for (let year = 1; year <= quarterlyYears; year++) {
+    for (let quarter = 1; quarter <= 4; quarter++) {
+      periods.push({
+        index,
+        year,
+        quarter,
+        label: periodLabel(year, quarter),
+        periodsPerYear: 4,
+        periodFraction: 0.25,
+        isConstruction: false,
+      });
+      index++;
+    }
+  }
+  for (let year = quarterlyYears + 1; year <= totalYears; year++) {
+    periods.push({
+      index,
       year,
-      quarter,
-      trucksPerDay: ramp.trucks,
-      dailyQuantityKg: ramp.trucks * production.kgPerTruckFill,
-      operatingDays: ramp.days,
-      pricePerKg: ramp.price,
-      annualExpenses: ramp.expenses,
-    };
+      quarter: null,
+      label: periodLabel(year, null),
+      periodsPerYear: 1,
+      periodFraction: 1,
+      isConstruction: false,
+    });
+    index++;
+  }
+  return periods;
+}
+
+/**
+ * Marks the leading periods as construction (no revenue), based on
+ * constructionDurationMonths converted to quarter-equivalents (e.g. 15
+ * months = 5 quarter-equivalents = Y1Q1-Q4 + Y2Q1 at the default
+ * quarterly granularity). Generalizes correctly even if construction
+ * spills into an annual period (each annual period = 4 quarter-equivalents).
+ */
+export function markConstructionPeriods(
+  periods: ModelPeriod[],
+  constructionDurationMonths: number,
+): ModelPeriod[] {
+  const constructionQuarterEquivalents = Math.round(constructionDurationMonths / 3);
+  let elapsed = 0;
+  return periods.map((p) => {
+    const isConstruction = elapsed < constructionQuarterEquivalents;
+    elapsed += p.periodsPerYear === 4 ? 1 : 4;
+    return { ...p, isConstruction };
   });
 }
 
-export function findQuarterInput(
-  quarters: QuarterInput[],
+export function buildPeriods(scenario: Scenario): ModelPeriod[] {
+  return markConstructionPeriods(
+    generatePeriods(scenario.modelSettings),
+    scenario.construction.constructionDurationMonths,
+  );
+}
+
+/** First year with any non-construction period (when the plant first has revenue). */
+export function firstOperatingYear(periods: ModelPeriod[]): number {
+  return periods.find((p) => !p.isConstruction)?.year ?? 2;
+}
+
+export function findQuarterlyPeriodInput(
+  stream: RevenueStream,
   year: number,
-  quarter: number,
-): QuarterInput | undefined {
-  return quarters.find((q) => q.year === year && q.quarter === quarter);
+  quarter: number | null,
+): PeriodRevenueInput | undefined {
+  return stream.periods.find((p) => p.year === year && p.quarter === quarter);
+}
+
+/** The daily H2 volume (kg/day) a stream's period input resolves to, per its offtake mode. */
+export function streamPeriodDailyKg(stream: RevenueStream, input: PeriodRevenueInput): number {
+  return stream.offtakeMode === 'direct'
+    ? input.dailyQuantityKg
+    : input.trucksPerDay * stream.kgPerTruckFill;
+}
+
+function computeStreamPeriodResult(
+  stream: RevenueStream,
+  period: ModelPeriod,
+): StreamPeriodResult {
+  const zero: StreamPeriodResult = {
+    streamId: stream.id,
+    streamName: stream.name,
+    revenue: 0,
+    cogs: 0,
+    dailyQuantityKg: 0,
+    operatingDays: 0,
+    pricePerKg: 0,
+  };
+  if (period.isConstruction || period.year < stream.startYear) return zero;
+
+  const input = findQuarterlyPeriodInput(stream, period.year, period.quarter);
+  if (!input) return zero;
+
+  const dailyKg = streamPeriodDailyKg(stream, input);
+  const revenue = dailyKg * input.pricePerKg * input.operatingDays;
+  const cogs = stream.h2ProductionCostPerKg * dailyKg * input.operatingDays;
+
+  return {
+    streamId: stream.id,
+    streamName: stream.name,
+    revenue,
+    cogs,
+    dailyQuantityKg: dailyKg,
+    operatingDays: input.operatingDays,
+    pricePerKg: input.pricePerKg,
+  };
 }
 
 /**
- * The daily H2 volume (kg/day) actually used in the revenue/COGS math for a
- * quarter, resolved per the scenario's offtake mode: derived from
- * trucksPerDay × kgPerTruckFill for truck-delivered offtake, or read
- * directly for a fixed-volume offtake agreement (e.g. a datacentre).
+ * Resolves the ANNUAL dollar amount for a line item in a given year.
+ * yearOverrides always take precedence; otherwise the escalation config
+ * is applied against baseAnnualAmount (or, for 'percentOfRevenue', against
+ * that year's total revenue across all streams).
  */
-export function quarterDailyKg(
-  input: QuarterInput,
-  production: ProductionSettings,
+export function resolveLineItemAnnualAmount(
+  item: ExpenseLineItem,
+  year: number,
+  totalRevenueForYear: number,
 ): number {
-  return production.offtakeMode === 'direct'
-    ? input.dailyQuantityKg
-    : input.trucksPerDay * production.kgPerTruckFill;
+  if (year < item.startYear) return 0;
+  if (item.yearOverrides[year] !== undefined) return item.yearOverrides[year];
+
+  const escalation: EscalationConfig = item.escalation;
+  switch (escalation.type) {
+    case 'flat':
+      return item.baseAnnualAmount;
+    case 'percentGrowth': {
+      const yearsElapsed = year - item.startYear;
+      const rate = escalation.growthRate ?? 0;
+      return item.baseAnnualAmount * Math.pow(1 + rate, yearsElapsed);
+    }
+    case 'percentOfRevenue':
+      return (escalation.percentOfRevenue ?? 0) * totalRevenueForYear;
+    case 'manual':
+      return 0;
+    default:
+      return item.baseAnnualAmount;
+  }
 }
 
-/** First quarter (in the full 20-quarter timeline) in which the ITC is received. */
-export function findITCQuarterIndex(receivedInYear: number): number {
-  const firstRevenueInYear = ALL_QUARTERS.findIndex(
-    (q) =>
-      q.year === receivedInYear &&
-      !isConstructionQuarter(q.year, q.quarter),
+/** First period (in timeline order) in which the ITC is received. */
+export function findITCPeriodIndex(periods: ModelPeriod[], receivedInYear: number): number {
+  const firstRevenueInYear = periods.findIndex(
+    (p) => p.year === receivedInYear && !p.isConstruction,
   );
   if (firstRevenueInYear !== -1) return firstRevenueInYear;
 
-  // The target year is entirely construction (e.g. Year 1): fall back to
-  // the last quarter of that year so the credit still lands within it.
-  const lastQuarterInYear = ALL_QUARTERS.reduce(
-    (lastIdx, q, idx) => (q.year === receivedInYear ? idx : lastIdx),
-    -1,
-  );
-  return lastQuarterInYear !== -1 ? lastQuarterInYear : 0;
+  let lastIndexInYear = -1;
+  periods.forEach((p, idx) => {
+    if (p.year === receivedInYear) lastIndexInYear = idx;
+  });
+  return lastIndexInYear !== -1 ? lastIndexInYear : 0;
 }
 
 /**
- * Runs the full 20-quarter cash flow / debt schedule.
+ * Runs the full period-by-period cash flow / debt schedule across the
+ * scenario's whole model horizon (quarterly through quarterlyYears, then
+ * annual through totalYears).
  * @param itcOverrideAmount optional override, used internally to compute the "no ITC" counterfactual.
  */
-export function computeQuarterlyModel(
+export function computeModelPeriods(
   scenario: Scenario,
   itcOverrideAmount?: number,
-): QuarterResult[] {
-  const { capital, construction, itc, production } = scenario;
+): PeriodResult[] {
+  const { capital, construction, itc, revenueStreams, expenseLineItems } = scenario;
+  const periods = buildPeriods(scenario);
   const itcAmount = itcOverrideAmount ?? itc.amount;
-  const itcQuarterIndex = findITCQuarterIndex(itc.receivedInYear);
+  const itcPeriodIndex = findITCPeriodIndex(periods, itc.receivedInYear);
+
   const amortYears = Math.max(capital.loanTenor - capital.gracePeriod, 0);
-  const scheduledQuarterlyPrincipal =
-    amortYears > 0 ? (capital.totalDebt / amortYears) * 0.25 : 0;
+  const annualScheduledPrincipal = amortYears > 0 ? capital.totalDebt / amortYears : 0;
   const principalStartYear = capital.gracePeriod + 2;
+
+  // Total revenue per year (all streams) is needed up-front for
+  // 'percentOfRevenue' expense line items.
+  const revenueByYear = new Map<number, number>();
+  for (const period of periods) {
+    const periodRevenue = sum(
+      revenueStreams.map((s) => computeStreamPeriodResult(s, period).revenue),
+    );
+    revenueByYear.set(period.year, (revenueByYear.get(period.year) ?? 0) + periodRevenue);
+  }
 
   let openingDebtBalance = capital.totalDebt;
   let cumulativeCF = 0;
+  const results: PeriodResult[] = [];
 
-  const results: QuarterResult[] = [];
+  for (const period of periods) {
+    const streamBreakdown = revenueStreams.map((s) => computeStreamPeriodResult(s, period));
+    const streamRevenue = sum(streamBreakdown.map((s) => s.revenue));
+    const streamCogs = sum(streamBreakdown.map((s) => s.cogs));
 
-  ALL_QUARTERS.forEach(({ year, quarter }, index) => {
-    const isConstruction = isConstructionQuarter(year, quarter);
-    const isITCQuarter = index === itcQuarterIndex;
-
-    let revenue = 0;
-    let cogs = 0;
-    let quarterlyExpenses = 0;
-    let annualExpensesBudget = 0;
-    let trucksPerDay = 0;
-    let dailyQuantityKg = 0;
-    let operatingDays = 0;
-    let pricePerKg = 0;
-
-    if (isConstruction) {
-      quarterlyExpenses = construction.constructionOpexPerMonth * 3;
+    // Construction-phase overhead (constructionOpexPerMonth) is tracked
+    // separately from categorized expense line items — it's a fixed
+    // pre-revenue cost, not a user-defined operating expense category, and
+    // folding it into e.g. the 'other' category would make a custom "Other"
+    // line item look like it includes costs the user never entered.
+    let preRevenueOpex = 0;
+    const expensesByCategory: Partial<Record<ExpenseCategory, number>> = {};
+    if (period.isConstruction) {
+      const monthsInPeriod = period.periodsPerYear === 4 ? 3 : 12;
+      preRevenueOpex = construction.constructionOpexPerMonth * monthsInPeriod;
     } else {
-      const input = findQuarterInput(scenario.quarters, year, quarter);
-      if (input) {
-        trucksPerDay = input.trucksPerDay;
-        operatingDays = input.operatingDays;
-        pricePerKg = input.pricePerKg;
-        annualExpensesBudget = input.annualExpenses;
-        dailyQuantityKg = quarterDailyKg(input, production);
-        revenue = dailyQuantityKg * pricePerKg * operatingDays;
-        cogs = production.h2ProductionCostPerKg * dailyQuantityKg * operatingDays;
-        quarterlyExpenses = annualExpensesBudget / 4;
+      const annualRevenueForYear = revenueByYear.get(period.year) ?? 0;
+      for (const item of expenseLineItems) {
+        const annualAmount = resolveLineItemAnnualAmount(item, period.year, annualRevenueForYear);
+        if (annualAmount === 0) continue;
+        const periodAmount = annualAmount * period.periodFraction;
+        expensesByCategory[item.category] = (expensesByCategory[item.category] ?? 0) + periodAmount;
       }
     }
 
+    const cogsFromLineItems = expensesByCategory.cogs ?? 0;
+    const revenue = streamRevenue;
+    const cogs = streamCogs + cogsFromLineItems;
     const grossProfit = revenue - cogs;
-    const ebitda = grossProfit - quarterlyExpenses;
+    const totalOperatingExpenses = sum(
+      Object.entries(expensesByCategory)
+        .filter(([category]) => category !== 'cogs')
+        .map(([, amount]) => amount ?? 0),
+    );
+    const ebitda = grossProfit - totalOperatingExpenses - preRevenueOpex;
 
-    const interest = openingDebtBalance * capital.interestRate * 0.25;
+    const interest = openingDebtBalance * capital.interestRate * period.periodFraction;
     let principal =
-      year >= principalStartYear ? scheduledQuarterlyPrincipal : 0;
+      period.year >= principalStartYear ? annualScheduledPrincipal * period.periodFraction : 0;
     principal = Math.min(principal, openingDebtBalance);
 
-    const itcReceived = isITCQuarter ? itcAmount : 0;
+    const isITCPeriod = period.index === itcPeriodIndex;
+    const itcReceived = isITCPeriod ? itcAmount : 0;
     let itcAppliedToDebt = 0;
     if (itcReceived > 0 && itc.appliedTo === 'debt') {
       itcAppliedToDebt = Math.min(itcReceived, openingDebtBalance - principal);
     }
 
-    const closingDebtBalance = Math.max(
-      openingDebtBalance - principal - itcAppliedToDebt,
-      0,
-    );
-
+    const closingDebtBalance = Math.max(openingDebtBalance - principal - itcAppliedToDebt, 0);
     const itcToCash = itc.appliedTo === 'debt' ? 0 : itcReceived;
     const netCash = ebitda - interest - principal + itcToCash;
     cumulativeCF += netCash;
@@ -229,21 +285,15 @@ export function computeQuarterlyModel(
     const dscr = debtService > 0 ? ebitda / debtService : null;
 
     results.push({
-      index,
-      year,
-      quarter,
-      label: quarterLabel(year, quarter),
-      isConstruction,
-      isITCQuarter,
-      trucksPerDay,
-      dailyQuantityKg,
-      operatingDays,
-      pricePerKg,
+      ...period,
+      isITCPeriod,
       revenue,
       cogs,
       grossProfit,
-      quarterlyExpenses,
-      annualExpensesBudget,
+      streamBreakdown,
+      preRevenueOpex,
+      expensesByCategory,
+      totalOperatingExpenses,
       ebitda,
       openingDebtBalance,
       interest,
@@ -256,14 +306,14 @@ export function computeQuarterlyModel(
     });
 
     openingDebtBalance = closingDebtBalance;
-  });
+  }
 
   return results;
 }
 
 export function computeAnnualSummary(
   scenario: Scenario,
-  quarterResults: QuarterResult[],
+  periods: PeriodResult[],
 ): AnnualResult[] {
   const totalCapex =
     scenario.construction.hardCapex +
@@ -271,44 +321,59 @@ export function computeAnnualSummary(
     scenario.construction.contingency;
   const annualDepreciation =
     (totalCapex * (1 - DEPRECIATION_SALVAGE_PCT)) / DEPRECIATION_LIFE_YEARS;
+  const firstOpYear = firstOperatingYear(periods);
 
-  const years = [1, 2, 3, 4, 5];
+  const years: number[] = [];
+  for (let y = 1; y <= scenario.modelSettings.totalYears; y++) years.push(y);
+
   return years.map((year) => {
-    const yearQuarters = quarterResults.filter((q) => q.year === year);
-    const revenue = sum(yearQuarters.map((q) => q.revenue));
-    const cogs = sum(yearQuarters.map((q) => q.cogs));
+    const yearPeriods = periods.filter((p) => p.year === year);
+    const revenue = sum(yearPeriods.map((p) => p.revenue));
+    const cogs = sum(yearPeriods.map((p) => p.cogs));
     const grossProfit = revenue - cogs;
-    const companyExpenses = sum(yearQuarters.map((q) => q.quarterlyExpenses));
-    const ebitda = sum(yearQuarters.map((q) => q.ebitda));
-    const interest = sum(yearQuarters.map((q) => q.interest));
-    const principal = sum(yearQuarters.map((q) => q.principal));
-    const itcReceived = sum(yearQuarters.map((q) => q.itcReceived));
-    const extraPrincipalFromITC =
-      scenario.itc.appliedTo === 'debt' ? itcReceived : 0;
+    const ebitda = sum(yearPeriods.map((p) => p.ebitda));
+    const interest = sum(yearPeriods.map((p) => p.interest));
+    const principal = sum(yearPeriods.map((p) => p.principal));
+    const itcReceived = sum(yearPeriods.map((p) => p.itcReceived));
+    const extraPrincipalFromITC = scenario.itc.appliedTo === 'debt' ? itcReceived : 0;
+
+    const expensesByCategory: Partial<Record<ExpenseCategory, number>> = {};
+    for (const p of yearPeriods) {
+      for (const [category, amount] of Object.entries(p.expensesByCategory)) {
+        const key = category as ExpenseCategory;
+        expensesByCategory[key] = (expensesByCategory[key] ?? 0) + (amount ?? 0);
+      }
+    }
+    const totalOperatingExpenses = sum(yearPeriods.map((p) => p.totalOperatingExpenses));
+    const preRevenueOpex = sum(yearPeriods.map((p) => p.preRevenueOpex));
+
     const totalDebtService = interest + principal + extraPrincipalFromITC;
-    const depreciation = year >= 2 ? annualDepreciation : 0;
+    const depreciation = year >= firstOpYear ? annualDepreciation : 0;
     const ebit = ebitda - depreciation;
-    const netCash = sum(yearQuarters.map((q) => q.netCash));
+    const netCash = sum(yearPeriods.map((p) => p.netCash));
     const closingDebtBalance =
-      yearQuarters.length > 0
-        ? yearQuarters[yearQuarters.length - 1].closingDebtBalance
+      yearPeriods.length > 0
+        ? yearPeriods[yearPeriods.length - 1].closingDebtBalance
         : scenario.capital.totalDebt;
-    const cumulativeCF =
-      yearQuarters.length > 0
-        ? yearQuarters[yearQuarters.length - 1].cumulativeCF
-        : 0;
+    const cumulativeCF = yearPeriods.length > 0 ? yearPeriods[yearPeriods.length - 1].cumulativeCF : 0;
     const debtServiceForDscr = interest + principal;
     const dscr = debtServiceForDscr > 0 ? ebitda / debtServiceForDscr : null;
 
+    const isConstruction = yearPeriods.length > 0 && yearPeriods.every((p) => p.isConstruction);
+    const isPartialRevenue =
+      yearPeriods.some((p) => p.isConstruction) && yearPeriods.some((p) => !p.isConstruction);
+
     return {
       year,
-      isConstruction: year === 1,
-      isPartialRevenue: year === 2,
+      isConstruction,
+      isPartialRevenue,
       revenue,
       cogs,
       grossProfit,
       grossMarginPct: revenue > 0 ? grossProfit / revenue : null,
-      companyExpenses,
+      preRevenueOpex,
+      expensesByCategory,
+      totalOperatingExpenses,
       ebitda,
       ebitdaMarginPct: revenue > 0 ? ebitda / revenue : null,
       depreciation,
@@ -327,26 +392,14 @@ export function computeAnnualSummary(
   });
 }
 
-/** Builds the annual equity cash flow stream used for IRR/payback: [-cashEquity, yr2Net, yr3Net, yr4Net, yr5Net]. */
-export function buildEquityCashFlows(
-  scenario: Scenario,
-  annual: AnnualResult[],
-): number[] {
-  const byYear = new Map(annual.map((a) => [a.year, a]));
-  return [
-    -scenario.capital.cashEquity,
-    byYear.get(2)?.netCash ?? 0,
-    byYear.get(3)?.netCash ?? 0,
-    byYear.get(4)?.netCash ?? 0,
-    byYear.get(5)?.netCash ?? 0,
-  ];
+/** Builds the equity cash flow stream used for IRR/payback: [-cashEquity, yr2Net, yr3Net, ..., yrNNet]. */
+export function buildEquityCashFlows(scenario: Scenario, annual: AnnualResult[]): number[] {
+  const sorted = [...annual].sort((a, b) => a.year - b.year);
+  return [-scenario.capital.cashEquity, ...sorted.slice(1).map((a) => a.netCash)];
 }
 
 function npv(rate: number, cashFlows: number[]): number {
-  return cashFlows.reduce(
-    (acc, cf, t) => acc + cf / Math.pow(1 + rate, t),
-    0,
-  );
+  return cashFlows.reduce((acc, cf, t) => acc + cf / Math.pow(1 + rate, t), 0);
 }
 
 function npvDerivative(rate: number, cashFlows: number[]): number {
@@ -357,10 +410,7 @@ function npvDerivative(rate: number, cashFlows: number[]): number {
 }
 
 /** Solves for IRR via Newton-Raphson with a bisection fallback for robustness. */
-export function solveIRR(
-  cashFlows: number[],
-  guess = 0.1,
-): number | null {
+export function solveIRR(cashFlows: number[], guess = 0.1): number | null {
   if (cashFlows.length === 0 || cashFlows.every((cf) => cf === 0)) return null;
   const hasPositive = cashFlows.some((cf) => cf > 0);
   const hasNegative = cashFlows.some((cf) => cf < 0);
@@ -386,7 +436,6 @@ export function solveIRR(
     return rate;
   }
 
-  // Bisection fallback across a wide, sane range.
   let low = -0.99;
   let high = 10;
   let lowVal = npv(low, cashFlows);
@@ -412,8 +461,7 @@ export function computeEquityIRRFromScenario(
   scenario: Scenario,
   annual: AnnualResult[],
 ): number | null {
-  const cashFlows = buildEquityCashFlows(scenario, annual);
-  return solveIRR(cashFlows);
+  return solveIRR(buildEquityCashFlows(scenario, annual));
 }
 
 export function computeEquityPaybackYear(
@@ -421,11 +469,11 @@ export function computeEquityPaybackYear(
   annual: AnnualResult[],
 ): number | null {
   const cashFlows = buildEquityCashFlows(scenario, annual);
+  const sorted = [...annual].sort((a, b) => a.year - b.year);
   let cumulative = cashFlows[0];
-  const years = [2, 3, 4, 5];
-  for (let i = 0; i < years.length; i++) {
+  for (let i = 0; i < sorted.length - 1; i++) {
     cumulative += cashFlows[i + 1];
-    if (cumulative > 0) return years[i];
+    if (cumulative > 0) return sorted[i + 1].year;
   }
   return null;
 }
@@ -433,7 +481,7 @@ export function computeEquityPaybackYear(
 export function computeMinDSCR(
   annual: AnnualResult[],
 ): { minDSCR: number | null; minDSCRYear: number | null } {
-  const revenueYears = annual.filter((a) => a.year >= 2 && a.dscr !== null);
+  const revenueYears = annual.filter((a) => !a.isConstruction && a.dscr !== null);
   if (revenueYears.length === 0) return { minDSCR: null, minDSCRYear: null };
   const min = revenueYears.reduce((best, a) =>
     (a.dscr as number) < (best.dscr as number) ? a : best,
@@ -459,8 +507,7 @@ export function computeSourcesAndUses(scenario: Scenario): SourcesAndUses {
     sources.itc;
 
   const preRevenueOpex =
-    construction.constructionOpexPerMonth *
-    construction.constructionDurationMonths;
+    construction.constructionOpexPerMonth * construction.constructionDurationMonths;
   const debtServiceReserve = calculateDSRAmount(scenario);
 
   const uses = {
@@ -494,172 +541,59 @@ export function computeSourcesAndUses(scenario: Scenario): SourcesAndUses {
 export function calculateDSRAmount(scenario: Scenario): number {
   const { capital, construction } = scenario;
   const amortYears = Math.max(capital.loanTenor - capital.gracePeriod, 0);
-  const annualPrincipal =
-    amortYears > 0 ? capital.totalDebt / amortYears : 0;
+  const annualPrincipal = amortYears > 0 ? capital.totalDebt / amortYears : 0;
   const annualInterest = capital.totalDebt * capital.interestRate;
   const monthlyDebtService = (annualInterest + annualPrincipal) / 12;
   return monthlyDebtService * construction.debtServiceReserveMonths;
 }
 
-/** Plant nameplate capacity — a direct input, independent of offtake mode. */
-export function computeMaxDailyCapacityKg(production: ProductionSettings): number {
-  return production.maxDailyCapacityKg;
+/** Plant nameplate capacity — a direct input, shared across all offtake streams. */
+export function computeMaxDailyCapacityKg(scenario: Scenario): number {
+  return scenario.plant.maxDailyCapacityKg;
 }
 
 /**
- * Break-even $/kg at a reference daily volume. Defaults to the scenario's
- * own average daily volume (mode-aware: trucks × kgPerTruckFill, or the
- * direct daily quantity) and average operating days, so it stays meaningful
- * for both truck-delivered and fixed-volume (e.g. datacentre) offtake.
+ * Operating break-even $/kg across the modeled revenue horizon: the
+ * average price that would exactly cover total COGS + operating expenses
+ * at the modeled volumes (ignores debt service, D&A, and taxes).
  */
-export function computeBreakEvenPricePerKg(
-  scenario: Scenario,
-  referenceDailyKg?: number,
-  operatingDays?: number,
-): number {
-  const { production, quarters } = scenario;
-  const avgDailyKg =
-    referenceDailyKg ??
-    (quarters.length > 0
-      ? sum(quarters.map((q) => quarterDailyKg(q, production))) / quarters.length
-      : 0);
-  const avgOperatingDays =
-    operatingDays ??
-    (quarters.length > 0
-      ? sum(quarters.map((q) => q.operatingDays)) / quarters.length
-      : 84);
-  const quarterlyKg = avgDailyKg * avgOperatingDays;
-  if (quarterlyKg === 0) return 0;
-  const avgAnnualExpenses =
-    quarters.length > 0
-      ? sum(quarters.map((q) => q.annualExpenses)) / quarters.length
-      : production.year5PlusAnnualExpenses;
-  const quarterlyExpenses = avgAnnualExpenses / 4;
-  return production.h2ProductionCostPerKg + quarterlyExpenses / quarterlyKg;
-}
-
-export function validateScenario(
-  scenario: Scenario,
-  annual: AnnualResult[],
-  sourcesAndUses: SourcesAndUses,
-  equityIRR: number | null,
-): ValidationResult {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  const isOvercapitalized =
-    scenario.capital.totalDebt > sourcesAndUses.uses.total;
-  if (isOvercapitalized) {
-    errors.push(
-      'Overcapitalised — reduce debt or increase CapEx. Total debt exceeds total uses.',
-    );
-  }
-
-  const fundingGap = sourcesAndUses.surplusOrGap < 0
-    ? Math.abs(sourcesAndUses.surplusOrGap)
-    : null;
-  if (fundingGap !== null) {
-    warnings.push(
-      `Funding gap of ${Math.round(fundingGap).toLocaleString()} — cannot close as structured.`,
-    );
-  }
-
-  const dscrWarningYears: number[] = [];
-  const dscrDangerYears: number[] = [];
-  for (const a of annual) {
-    // DSCR covenants are only meaningful once revenue exists; Year 1
-    // (construction, no revenue) always shows a negative/undefined ratio.
-    if (a.dscr === null || a.year < 2) continue;
-    if (a.dscr < DSCR_DANGER) {
-      dscrDangerYears.push(a.year);
-    } else if (a.dscr < DSCR_TARGET) {
-      dscrWarningYears.push(a.year);
-    }
-  }
-
-  const irrBelowThreshold = equityIRR !== null && equityIRR < IRR_MIN_THRESHOLD;
-  if (irrBelowThreshold) {
-    warnings.push('Equity IRR is below the minimum 8% investor threshold.');
-  }
-
-  const expectedConstructionMonths = 15;
-  if (
-    scenario.construction.constructionDurationMonths !==
-    expectedConstructionMonths
-  ) {
-    warnings.push(
-      `Construction duration is ${scenario.construction.constructionDurationMonths}mo; model assumes Year 1 (12mo) + Y2Q1 (3mo) = 15mo.`,
-    );
-  }
-
-  return {
-    isOvercapitalized,
-    fundingGap,
-    dscrWarningYears,
-    dscrDangerYears,
-    irrBelowThreshold,
-    errors,
-    warnings,
-  };
-}
-
-export function runModel(scenario: Scenario): ModelOutputs {
-  const quarters = computeQuarterlyModel(scenario);
-  const annual = computeAnnualSummary(scenario, quarters);
-  const sourcesAndUses = computeSourcesAndUses(scenario);
-  const equityIRR = computeEquityIRRFromScenario(scenario, annual);
-  const equityPaybackYear = computeEquityPaybackYear(scenario, annual);
-  const { minDSCR, minDSCRYear } = computeMinDSCR(annual);
-
-  const totalInterestPaid = sum(quarters.map((q) => q.interest));
-  const noItcQuarters = computeQuarterlyModel(scenario, 0);
-  const totalInterestPaidNoITC = sum(noItcQuarters.map((q) => q.interest));
-  const interestSavedFromITC = totalInterestPaidNoITC - totalInterestPaid;
-
-  const netDebtAfterITC =
-    quarters.length > 0 ? quarters[quarters.length - 1].closingDebtBalance : 0;
-
-  const validation = validateScenario(scenario, annual, sourcesAndUses, equityIRR);
-
-  return {
-    quarters,
-    annual,
-    sourcesAndUses,
-    totalRevenue5yr: sum(annual.map((a) => a.revenue)),
-    totalNetCash5yr: sum(annual.map((a) => a.netCash)),
-    equityIRR,
-    equityPaybackYear,
-    minDSCR,
-    minDSCRYear,
-    interestSavedFromITC,
-    totalInterestPaid,
-    totalInterestPaidNoITC,
-    netDebtAfterITC,
-    validation,
-  };
-}
-
-export function sum(values: number[]): number {
-  return values.reduce((acc, v) => acc + v, 0);
+export function computeBreakEvenPricePerKg(periods: PeriodResult[]): number {
+  const revenuePeriods = periods.filter((p) => !p.isConstruction);
+  const totalKg = sum(
+    revenuePeriods.map((p) =>
+      sum(p.streamBreakdown.map((s) => s.dailyQuantityKg * s.operatingDays)),
+    ),
+  );
+  if (totalKg === 0) return 0;
+  const totalCosts = sum(revenuePeriods.map((p) => p.cogs + p.totalOperatingExpenses));
+  return totalCosts / totalKg;
 }
 
 /**
- * Projects the debt schedule (independent of revenue) until the balance
- * reaches zero, returning the year/quarter of payoff. Used to compare
- * payoff timing with vs. without the ITC. Returns null if the debt never
- * fully amortizes within a generous 50-year cap (e.g. no principal is
- * ever scheduled).
+ * Projects the debt schedule (independent of revenue) in quarters until the
+ * balance reaches zero, returning the year/quarter of payoff — used to
+ * compare payoff timing with vs. without the ITC. This always simulates at
+ * quarterly resolution regardless of the scenario's modelSettings, since it
+ * is a standalone debt-only projection. Returns null if the debt never
+ * fully amortizes within a generous 50-year cap.
  */
 export function computeDebtPayoffQuarter(
   scenario: Scenario,
   itcOverrideAmount?: number,
-): YearQuarter | null {
-  const { capital, itc } = scenario;
+): { year: number; quarter: number } | null {
+  const { capital, construction, itc } = scenario;
   const itcAmount = itcOverrideAmount ?? itc.amount;
-  const itcQuarterIndex = findITCQuarterIndex(itc.receivedInYear);
+  const constructionQuarters = Math.round(construction.constructionDurationMonths / 3);
+  const itcQuarterIndex = (() => {
+    const yearStartIndex = (itc.receivedInYear - 1) * 4;
+    for (let q = 0; q < 4; q++) {
+      const idx = yearStartIndex + q;
+      if (idx >= constructionQuarters) return idx; // first non-construction quarter in that year
+    }
+    return yearStartIndex + 3; // entirely construction: fall back to the last quarter of the year
+  })();
   const amortYears = Math.max(capital.loanTenor - capital.gracePeriod, 0);
-  const scheduledQuarterlyPrincipal =
-    amortYears > 0 ? (capital.totalDebt / amortYears) * 0.25 : 0;
+  const scheduledQuarterlyPrincipal = amortYears > 0 ? (capital.totalDebt / amortYears) * 0.25 : 0;
   const principalStartYear = capital.gracePeriod + 2;
 
   let opening = capital.totalDebt;
@@ -688,4 +622,99 @@ export function computeDebtPayoffQuarter(
   }
 
   return null;
+}
+
+export function validateScenario(
+  scenario: Scenario,
+  annual: AnnualResult[],
+  sourcesAndUses: SourcesAndUses,
+  equityIRR: number | null,
+): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  const isOvercapitalized = scenario.capital.totalDebt > sourcesAndUses.uses.total;
+  if (isOvercapitalized) {
+    errors.push(
+      'Overcapitalised — reduce debt or increase CapEx. Total debt exceeds total uses.',
+    );
+  }
+
+  const fundingGap =
+    sourcesAndUses.surplusOrGap < 0 ? Math.abs(sourcesAndUses.surplusOrGap) : null;
+  if (fundingGap !== null) {
+    warnings.push(
+      `Funding gap of ${Math.round(fundingGap).toLocaleString()} — cannot close as structured.`,
+    );
+  }
+
+  const dscrWarningYears: number[] = [];
+  const dscrDangerYears: number[] = [];
+  for (const a of annual) {
+    if (a.dscr === null || a.isConstruction) continue;
+    if (a.dscr < DSCR_DANGER) {
+      dscrDangerYears.push(a.year);
+    } else if (a.dscr < DSCR_TARGET) {
+      dscrWarningYears.push(a.year);
+    }
+  }
+
+  const irrBelowThreshold = equityIRR !== null && equityIRR < IRR_MIN_THRESHOLD;
+  if (irrBelowThreshold) {
+    warnings.push('Equity IRR is below the minimum 8% investor threshold.');
+  }
+
+  const constructionQuarterEquivalents = Math.round(
+    scenario.construction.constructionDurationMonths / 3,
+  );
+  if (constructionQuarterEquivalents > scenario.modelSettings.quarterlyYears * 4) {
+    warnings.push(
+      'Construction duration extends beyond the quarterly modeling window; increase "quarterly years" in Model Settings for accurate construction-period detail.',
+    );
+  }
+
+  return {
+    isOvercapitalized,
+    fundingGap,
+    dscrWarningYears,
+    dscrDangerYears,
+    irrBelowThreshold,
+    errors,
+    warnings,
+  };
+}
+
+export function runModel(scenario: Scenario): ModelOutputs {
+  const periods = computeModelPeriods(scenario);
+  const annual = computeAnnualSummary(scenario, periods);
+  const sourcesAndUses = computeSourcesAndUses(scenario);
+  const equityIRR = computeEquityIRRFromScenario(scenario, annual);
+  const equityPaybackYear = computeEquityPaybackYear(scenario, annual);
+  const { minDSCR, minDSCRYear } = computeMinDSCR(annual);
+
+  const totalInterestPaid = sum(periods.map((p) => p.interest));
+  const noItcPeriods = computeModelPeriods(scenario, 0);
+  const totalInterestPaidNoITC = sum(noItcPeriods.map((p) => p.interest));
+  const interestSavedFromITC = totalInterestPaidNoITC - totalInterestPaid;
+
+  const netDebtAfterITC = periods.length > 0 ? periods[periods.length - 1].closingDebtBalance : 0;
+
+  const validation = validateScenario(scenario, annual, sourcesAndUses, equityIRR);
+
+  return {
+    periods,
+    annual,
+    sourcesAndUses,
+    totalRevenueAllYears: sum(annual.map((a) => a.revenue)),
+    totalNetCashAllYears: sum(annual.map((a) => a.netCash)),
+    equityIRR,
+    equityPaybackYear,
+    minDSCR,
+    minDSCRYear,
+    interestSavedFromITC,
+    totalInterestPaid,
+    totalInterestPaidNoITC,
+    netDebtAfterITC,
+    validation,
+  };
 }

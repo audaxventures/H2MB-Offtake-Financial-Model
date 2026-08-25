@@ -2,7 +2,8 @@ import { useRef, useState } from 'react';
 import { AppShell } from '@/components/layout/AppShell';
 import type { ViewId } from '@/components/layout/Sidebar';
 import { AssumptionsDashboard } from '@/components/views/AssumptionsDashboard';
-import { QuarterlyModel } from '@/components/views/QuarterlyModel';
+import { RevenueStreams } from '@/components/views/RevenueStreams';
+import { ExpenseItems } from '@/components/views/ExpenseItems';
 import { AnnualSummary } from '@/components/views/AnnualSummary';
 import { SourcesAndUses } from '@/components/views/SourcesAndUses';
 import { ScenarioManager } from '@/components/views/ScenarioManager';
@@ -50,7 +51,8 @@ function App() {
         bannerSlot={<GlobalValidationBanners />}
       >
         {activeView === 'assumptions' && <AssumptionsDashboard />}
-        {activeView === 'quarterly' && <QuarterlyModel />}
+        {activeView === 'revenue' && <RevenueStreams />}
+        {activeView === 'expenses' && <ExpenseItems />}
         {activeView === 'annual' && <AnnualSummary />}
         {activeView === 'sources' && <SourcesAndUses />}
       </AppShell>

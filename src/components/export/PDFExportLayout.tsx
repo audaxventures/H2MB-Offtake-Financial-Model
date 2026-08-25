@@ -12,13 +12,14 @@ interface PDFExportLayoutProps {
 
 export const PDFExportLayout = forwardRef<HTMLDivElement, PDFExportLayoutProps>(
   function PDFExportLayout({ scenario, outputs }, ref) {
-    const itcYear = outputs.quarters.find((q) => q.itcReceived > 0)?.year ?? null;
+    const itcYear = outputs.periods.find((p) => p.itcReceived > 0)?.year ?? null;
+    const pageWidth = Math.max(1500, 700 + outputs.annual.length * 55);
 
     return (
       <div
         ref={ref}
         style={{
-          width: 1500,
+          width: pageWidth,
           padding: 40,
           background: '#ffffff',
           color: '#0f172a',
@@ -40,8 +41,14 @@ export const PDFExportLayout = forwardRef<HTMLDivElement, PDFExportLayoutProps>(
 
         {/* KPI Strip */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 20 }}>
-          <Kpi label="Total 5-yr Revenue" value={formatCurrencyCompact(outputs.totalRevenue5yr)} />
-          <Kpi label="Net Cash (5yr)" value={formatCurrencyCompact(outputs.totalNetCash5yr)} />
+          <Kpi
+            label={`Total ${outputs.annual.length}-yr Revenue`}
+            value={formatCurrencyCompact(outputs.totalRevenueAllYears)}
+          />
+          <Kpi
+            label={`Net Cash (${outputs.annual.length}yr)`}
+            value={formatCurrencyCompact(outputs.totalNetCashAllYears)}
+          />
           <Kpi
             label="Equity IRR"
             value={outputs.equityIRR !== null ? formatPercent(outputs.equityIRR, 1) : 'N/A'}

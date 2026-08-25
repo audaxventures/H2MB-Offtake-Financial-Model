@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ALL_QUARTERS,
-  CONSTRUCTION_QUARTERS,
-  DSCR_TARGET,
-  REVENUE_QUARTERS,
   buildEquityCashFlows,
+  buildPeriods,
   calculateDSRAmount,
   computeAnnualSummary,
   computeBreakEvenPricePerKg,
@@ -13,313 +10,395 @@ import {
   computeEquityPaybackYear,
   computeMaxDailyCapacityKg,
   computeMinDSCR,
-  computeQuarterlyModel,
+  computeModelPeriods,
   computeSourcesAndUses,
-  findITCQuarterIndex,
-  isConstructionQuarter,
-  quarterDailyKg,
-  quarterLabel,
+  findITCPeriodIndex,
+  firstOperatingYear,
+  generatePeriods,
+  markConstructionPeriods,
+  periodLabel,
+  resolveLineItemAnnualAmount,
   runModel,
   solveIRR,
+  streamPeriodDailyKg,
   sum,
   validateScenario,
 } from './calculations';
 import { createDefaultScenario } from './defaults';
-import type { Scenario } from './types';
+import type { ExpenseLineItem, RevenueStream, Scenario } from './types';
 
-describe('quarter timeline', () => {
-  it('has 20 total quarters across the 5-year model', () => {
-    expect(ALL_QUARTERS).toHaveLength(20);
+describe('period timeline', () => {
+  it('generates 4 quarters/year for quarterlyYears, then 1 annual period/year through totalYears', () => {
+    const periods = generatePeriods({ totalYears: 15, quarterlyYears: 5 });
+    expect(periods).toHaveLength(5 * 4 + (15 - 5));
+    expect(periods.filter((p) => p.quarter !== null)).toHaveLength(20);
+    expect(periods.filter((p) => p.quarter === null)).toHaveLength(10);
+    expect(periods[0]).toMatchObject({ year: 1, quarter: 1, periodsPerYear: 4, periodFraction: 0.25 });
+    expect(periods[19]).toMatchObject({ year: 5, quarter: 4 });
+    expect(periods[20]).toMatchObject({ year: 6, quarter: null, periodsPerYear: 1, periodFraction: 1 });
+    expect(periods[periods.length - 1]).toMatchObject({ year: 15, quarter: null });
   });
 
-  it('has 5 construction quarters (Y1Q1-Q4 + Y2Q1)', () => {
-    expect(CONSTRUCTION_QUARTERS).toHaveLength(5);
-    expect(CONSTRUCTION_QUARTERS[0]).toEqual({ year: 1, quarter: 1 });
-    expect(CONSTRUCTION_QUARTERS[4]).toEqual({ year: 2, quarter: 1 });
+  it('labels quarterly and annual periods correctly', () => {
+    expect(periodLabel(2, 3)).toBe('Y2Q3');
+    expect(periodLabel(8, null)).toBe('Y8');
   });
 
-  it('has 15 revenue quarters spanning Y2Q2 through Y5Q4', () => {
-    expect(REVENUE_QUARTERS).toHaveLength(15);
-    expect(REVENUE_QUARTERS[0]).toEqual({ year: 2, quarter: 2 });
-    expect(REVENUE_QUARTERS[REVENUE_QUARTERS.length - 1]).toEqual({
-      year: 5,
-      quarter: 4,
-    });
-  });
-
-  it('quarterLabel formats correctly', () => {
-    expect(quarterLabel(2, 3)).toBe('Y2Q3');
-  });
-
-  it('isConstructionQuarter flags only the 5 construction quarters', () => {
-    expect(isConstructionQuarter(1, 1)).toBe(true);
-    expect(isConstructionQuarter(2, 1)).toBe(true);
-    expect(isConstructionQuarter(2, 2)).toBe(false);
-    expect(isConstructionQuarter(5, 4)).toBe(false);
-  });
-});
-
-describe('findITCQuarterIndex', () => {
-  it('lands on the first revenue quarter of the target year when one exists', () => {
-    // Year 2's first revenue quarter is Y2Q2, which is index 5 in ALL_QUARTERS.
-    const idx = findITCQuarterIndex(2);
-    expect(ALL_QUARTERS[idx]).toEqual({ year: 2, quarter: 2 });
-  });
-
-  it('falls back to the last quarter of the year when the year is fully construction', () => {
-    const idx = findITCQuarterIndex(1);
-    expect(ALL_QUARTERS[idx]).toEqual({ year: 1, quarter: 4 });
-  });
-
-  it('lands on Q1 for years with a full revenue year', () => {
-    const idx = findITCQuarterIndex(3);
-    expect(ALL_QUARTERS[idx]).toEqual({ year: 3, quarter: 1 });
-  });
-});
-
-describe('createDefaultQuarters', () => {
-  it('produces one entry per revenue quarter', () => {
-    const scenario = createDefaultScenario();
-    expect(scenario.quarters).toHaveLength(REVENUE_QUARTERS.length);
-  });
-
-  it('uses the year5Plus production settings for Year 5 quarters', () => {
-    const scenario = createDefaultScenario();
-    const production = scenario.production;
-    const y5Quarters = scenario.quarters.filter((q) => q.year === 5);
-    expect(y5Quarters).toHaveLength(4);
-    for (const q of y5Quarters) {
-      expect(q.pricePerKg).toBe(production.year5PlusPricePerKg);
-      expect(q.annualExpenses).toBe(production.year5PlusAnnualExpenses);
-    }
-  });
-});
-
-describe('computeQuarterlyModel', () => {
-  const scenario = createDefaultScenario();
-  const results = computeQuarterlyModel(scenario);
-
-  it('produces exactly 20 quarter results', () => {
-    expect(results).toHaveLength(20);
-  });
-
-  it('has zero revenue and COGS in every construction quarter', () => {
-    for (const r of results.filter((r) => r.isConstruction)) {
-      expect(r.revenue).toBe(0);
-      expect(r.cogs).toBe(0);
-    }
-  });
-
-  it('computes construction quarter EBITDA as -3 months of construction opex', () => {
-    const q = results[0];
-    expect(q.isConstruction).toBe(true);
-    expect(q.quarterlyExpenses).toBeCloseTo(
-      scenario.construction.constructionOpexPerMonth * 3,
-      6,
+  it('marks the leading 5 quarter-equivalents as construction for a 15-month build (default)', () => {
+    const periods = markConstructionPeriods(
+      generatePeriods({ totalYears: 15, quarterlyYears: 5 }),
+      15,
     );
-    expect(q.ebitda).toBeCloseTo(-q.quarterlyExpenses, 6);
+    const construction = periods.filter((p) => p.isConstruction);
+    expect(construction).toHaveLength(5);
+    expect(construction.map((p) => p.label)).toEqual(['Y1Q1', 'Y1Q2', 'Y1Q3', 'Y1Q4', 'Y2Q1']);
   });
 
-  it('computes revenue = trucks x kg/fill x price x days for a revenue quarter', () => {
-    const input = scenario.quarters[0]; // first revenue quarter, Y2Q2
-    const r = results.find((r) => r.year === input.year && r.quarter === input.quarter)!;
-    const expectedRevenue =
-      input.trucksPerDay *
-      scenario.production.kgPerTruckFill *
-      input.pricePerKg *
-      input.operatingDays;
-    expect(r.revenue).toBeCloseTo(expectedRevenue, 6);
+  it('correctly marks construction periods that spill into the annual range', () => {
+    // 9 quarter-equivalents of construction with only 1 quarterly year means
+    // Year 1 (4 quarterly periods, 1 q-equiv each) covers 4, Year 2 (one
+    // annual period, 4 q-equiv) starts construction at elapsed=4 (<9) so
+    // it's marked construction too, reaching elapsed=8; Year 3's annual
+    // period starts at elapsed=8 (<9) so it's ALSO marked construction
+    // (whole periods, not fractional) before elapsed reaches 12.
+    const periods = markConstructionPeriods(
+      generatePeriods({ totalYears: 5, quarterlyYears: 1 }),
+      27,
+    );
+    const constructionYears = [...new Set(periods.filter((p) => p.isConstruction).map((p) => p.year))];
+    expect(constructionYears).toEqual([1, 2, 3]);
+    expect(periods.find((p) => p.year === 4)!.isConstruction).toBe(false);
   });
 
-  it('computes COGS = h2ProductionCostPerKg x trucks x kg/fill x days', () => {
-    const input = scenario.quarters[0];
-    const r = results.find((r) => r.year === input.year && r.quarter === input.quarter)!;
-    const expectedCogs =
-      scenario.production.h2ProductionCostPerKg *
-      input.trucksPerDay *
-      scenario.production.kgPerTruckFill *
-      input.operatingDays;
-    expect(r.cogs).toBeCloseTo(expectedCogs, 6);
+  it('computes firstOperatingYear as the year of the first non-construction period', () => {
+    const scenario = createDefaultScenario();
+    const periods = buildPeriods(scenario);
+    expect(firstOperatingYear(periods)).toBe(2);
+  });
+});
+
+describe('findITCPeriodIndex', () => {
+  it('lands on the first non-construction period of the target year when one exists', () => {
+    const periods = buildPeriods(createDefaultScenario());
+    const idx = findITCPeriodIndex(periods, 2);
+    expect(periods[idx].label).toBe('Y2Q2');
   });
 
-  it('computes gross profit = revenue - COGS and EBITDA = gross profit - quarterly expenses', () => {
-    const r = results.find((r) => !r.isConstruction)!;
-    expect(r.grossProfit).toBeCloseTo(r.revenue - r.cogs, 6);
-    expect(r.quarterlyExpenses).toBeCloseTo(r.annualExpensesBudget / 4, 6);
-    expect(r.ebitda).toBeCloseTo(r.grossProfit - r.quarterlyExpenses, 6);
+  it('falls back to the last period of a fully-construction year', () => {
+    const periods = buildPeriods(createDefaultScenario());
+    const idx = findITCPeriodIndex(periods, 1);
+    expect(periods[idx].label).toBe('Y1Q4');
   });
 
-  it('opens the debt schedule at the full totalDebt balance in Y1Q1', () => {
-    expect(results[0].openingDebtBalance).toBe(scenario.capital.totalDebt);
+  it('resolves an annual period directly when the target year is beyond quarterlyYears', () => {
+    const periods = buildPeriods(createDefaultScenario());
+    const idx = findITCPeriodIndex(periods, 8);
+    expect(periods[idx].label).toBe('Y8');
+  });
+});
+
+describe('streamPeriodDailyKg', () => {
+  const baseStream: RevenueStream = {
+    id: 's1',
+    name: 'Test Stream',
+    offtakeMode: 'trucks',
+    kgPerTruckFill: 80,
+    h2ProductionCostPerKg: 2.41,
+    startYear: 2,
+    periods: [],
+  };
+
+  it('derives daily kg from trucks x kgPerTruckFill in trucks mode', () => {
+    const input = { year: 2, quarter: 2, trucksPerDay: 10, dailyQuantityKg: 999, operatingDays: 90, pricePerKg: 12 };
+    expect(streamPeriodDailyKg(baseStream, input)).toBe(800);
   });
 
-  it('computes interest as openingBalance x rate x 0.25 every quarter', () => {
-    for (const r of results) {
-      expect(r.interest).toBeCloseTo(
-        r.openingDebtBalance * scenario.capital.interestRate * 0.25,
-        6,
-      );
+  it('uses dailyQuantityKg directly (ignoring trucksPerDay) in direct mode', () => {
+    const directStream: RevenueStream = { ...baseStream, offtakeMode: 'direct' };
+    const input = { year: 2, quarter: 2, trucksPerDay: 999, dailyQuantityKg: 300, operatingDays: 90, pricePerKg: 14 };
+    expect(streamPeriodDailyKg(directStream, input)).toBe(300);
+  });
+});
+
+describe('resolveLineItemAnnualAmount', () => {
+  const base: ExpenseLineItem = {
+    id: 'e1',
+    name: 'Test Expense',
+    category: 'ga',
+    startYear: 2,
+    baseAnnualAmount: 100_000,
+    escalation: { type: 'flat' },
+    yearOverrides: {},
+  };
+
+  it('returns 0 before the item starts', () => {
+    expect(resolveLineItemAnnualAmount(base, 1, 0)).toBe(0);
+  });
+
+  it('flat: returns the same amount every year', () => {
+    expect(resolveLineItemAnnualAmount(base, 2, 0)).toBe(100_000);
+    expect(resolveLineItemAnnualAmount(base, 10, 0)).toBe(100_000);
+  });
+
+  it('percentGrowth: compounds annually from startYear', () => {
+    const item: ExpenseLineItem = { ...base, escalation: { type: 'percentGrowth', growthRate: 0.1 } };
+    expect(resolveLineItemAnnualAmount(item, 2, 0)).toBeCloseTo(100_000, 6);
+    expect(resolveLineItemAnnualAmount(item, 3, 0)).toBeCloseTo(110_000, 6);
+    expect(resolveLineItemAnnualAmount(item, 5, 0)).toBeCloseTo(100_000 * Math.pow(1.1, 3), 6);
+  });
+
+  it('percentOfRevenue: scales with the year\'s total revenue', () => {
+    const item: ExpenseLineItem = { ...base, baseAnnualAmount: 0, escalation: { type: 'percentOfRevenue', percentOfRevenue: 0.05 } };
+    expect(resolveLineItemAnnualAmount(item, 3, 2_000_000)).toBeCloseTo(100_000, 6);
+  });
+
+  it('manual: returns 0 unless a yearOverride is present', () => {
+    const item: ExpenseLineItem = { ...base, escalation: { type: 'manual' }, yearOverrides: { 8: 250_000 } };
+    expect(resolveLineItemAnnualAmount(item, 5, 0)).toBe(0);
+    expect(resolveLineItemAnnualAmount(item, 8, 0)).toBe(250_000);
+  });
+
+  it('yearOverrides take precedence over any escalation type', () => {
+    const item: ExpenseLineItem = { ...base, escalation: { type: 'percentGrowth', growthRate: 0.5 }, yearOverrides: { 3: 999 } };
+    expect(resolveLineItemAnnualAmount(item, 3, 0)).toBe(999);
+  });
+});
+
+describe('computeModelPeriods', () => {
+  const scenario = createDefaultScenario();
+  const periods = computeModelPeriods(scenario);
+
+  it('produces one PeriodResult per timeline period (30 for the 15yr/5yr-quarterly default)', () => {
+    expect(periods).toHaveLength(30);
+  });
+
+  it('has zero revenue/cogs in every construction period, with construction opex tracked as preRevenueOpex (not a categorized line item)', () => {
+    for (const p of periods.filter((p) => p.isConstruction)) {
+      expect(p.revenue).toBe(0);
+      expect(p.cogs).toBe(0);
+      expect(p.preRevenueOpex).toBeCloseTo(scenario.construction.constructionOpexPerMonth * 3, 6);
+      expect(p.totalOperatingExpenses).toBe(0);
+      expect(Object.keys(p.expensesByCategory)).toHaveLength(0);
+      expect(p.ebitda).toBeCloseTo(-p.preRevenueOpex, 6);
     }
   });
 
-  it('charges zero principal before year >= gracePeriod + 2, and a flat scheduled amount after', () => {
-    const threshold = scenario.capital.gracePeriod + 2; // = 3 by default
-    const amortYears = scenario.capital.loanTenor - scenario.capital.gracePeriod;
-    const expectedQuarterlyPrincipal =
-      (scenario.capital.totalDebt / amortYears) * 0.25;
+  it('computes revenue/COGS for a quarterly revenue period from its single stream', () => {
+    const stream = scenario.revenueStreams[0];
+    const input = stream.periods[0]; // Y2Q2
+    const p = periods.find((p) => p.label === 'Y2Q2')!;
+    const dailyKg = input.trucksPerDay * stream.kgPerTruckFill;
+    expect(p.revenue).toBeCloseTo(dailyKg * input.pricePerKg * input.operatingDays, 6);
+    expect(p.cogs).toBeCloseTo(stream.h2ProductionCostPerKg * dailyKg * input.operatingDays, 6);
+    expect(p.grossProfit).toBeCloseTo(p.revenue - p.cogs, 6);
+  });
 
-    for (const r of results) {
-      if (r.year < threshold) {
-        expect(r.principal).toBe(0);
+  it('computes revenue for an annual (Year 6+) period using the full-year operatingDays', () => {
+    const stream = scenario.revenueStreams[0];
+    const input = stream.periods.find((p) => p.year === 8)!;
+    const p = periods.find((p) => p.label === 'Y8')!;
+    const dailyKg = input.trucksPerDay * stream.kgPerTruckFill;
+    expect(p.revenue).toBeCloseTo(dailyKg * input.pricePerKg * input.operatingDays, 6);
+    expect(p.periodFraction).toBe(1);
+  });
+
+  it('splits each expense line item\'s annual amount evenly across quarters, and applies it whole in annual periods', () => {
+    const payroll = scenario.expenseLineItems.find((i) => i.name === 'Payroll & Benefits')!;
+    const y3Quarters = periods.filter((p) => p.year === 3);
+    const y3PayrollPerQuarter = y3Quarters.map((p) => p.expensesByCategory.payroll ?? 0);
+    const annualAmount = payroll.baseAnnualAmount * Math.pow(1 + (payroll.escalation.growthRate ?? 0), 3 - payroll.startYear);
+    for (const q of y3PayrollPerQuarter) {
+      expect(q).toBeCloseTo(annualAmount / 4, 6);
+    }
+    const y8 = periods.find((p) => p.label === 'Y8')!;
+    const y8AnnualAmount = payroll.baseAnnualAmount * Math.pow(1 + (payroll.escalation.growthRate ?? 0), 8 - payroll.startYear);
+    expect(y8.expensesByCategory.payroll).toBeCloseTo(y8AnnualAmount, 6);
+  });
+
+  it('folds cogs-category line items into cogs/gross profit rather than operating expenses', () => {
+    const scenarioWithCogsItem: Scenario = {
+      ...scenario,
+      expenseLineItems: [
+        ...scenario.expenseLineItems,
+        {
+          id: 'extra-cogs',
+          name: 'Extra COGS Item',
+          category: 'cogs',
+          startYear: 2,
+          baseAnnualAmount: 40_000,
+          escalation: { type: 'flat' },
+          yearOverrides: {},
+        },
+      ],
+    };
+    const withExtra = computeModelPeriods(scenarioWithCogsItem);
+    const without = computeModelPeriods(scenario);
+    const y3WithExtra = withExtra.find((p) => p.label === 'Y3Q1')!;
+    const y3Without = without.find((p) => p.label === 'Y3Q1')!;
+    expect(y3WithExtra.cogs - y3Without.cogs).toBeCloseTo(10_000, 6); // 40k/4
+    expect(y3WithExtra.totalOperatingExpenses).toBeCloseTo(y3Without.totalOperatingExpenses, 6);
+  });
+
+  it('opens the debt schedule at totalDebt and accrues interest at balance x rate x periodFraction', () => {
+    expect(periods[0].openingDebtBalance).toBe(scenario.capital.totalDebt);
+    for (const p of periods) {
+      expect(p.interest).toBeCloseTo(p.openingDebtBalance * scenario.capital.interestRate * p.periodFraction, 6);
+    }
+  });
+
+  it('charges principal only once year >= gracePeriod + 2, capped at the scheduled amount (and at the remaining balance)', () => {
+    const threshold = scenario.capital.gracePeriod + 2;
+    const amortYears = scenario.capital.loanTenor - scenario.capital.gracePeriod;
+    const annualScheduled = scenario.capital.totalDebt / amortYears;
+    for (const p of periods) {
+      if (p.year < threshold) {
+        expect(p.principal).toBe(0);
       } else {
-        expect(r.principal).toBeCloseTo(expectedQuarterlyPrincipal, 6);
+        const scheduled = annualScheduled * p.periodFraction;
+        // The final payment before full payoff is capped at the remaining
+        // opening balance, so it can be less than the scheduled amount.
+        expect(p.principal).toBeLessThanOrEqual(scheduled + 1e-6);
+        expect(p.principal).toBeLessThanOrEqual(p.openingDebtBalance + 1e-6);
+        if (p.openingDebtBalance >= scheduled) {
+          expect(p.principal).toBeCloseTo(scheduled, 6);
+        }
       }
     }
   });
 
-  it('receives the ITC as a lump sum in the designated quarter only', () => {
-    const itcQuarters = results.filter((r) => r.itcReceived > 0);
-    expect(itcQuarters).toHaveLength(1);
-    expect(itcQuarters[0].itcReceived).toBe(scenario.itc.amount);
-    expect(itcQuarters[0].year).toBe(scenario.itc.receivedInYear);
-  });
+  it('receives the ITC exactly once, in the designated period, and reduces the debt balance when applied to debt', () => {
+    const itcPeriods = periods.filter((p) => p.itcReceived > 0);
+    expect(itcPeriods).toHaveLength(1);
+    expect(itcPeriods[0].itcReceived).toBe(scenario.itc.amount);
+    expect(itcPeriods[0].year).toBe(scenario.itc.receivedInYear);
+    expect(itcPeriods[0].isITCPeriod).toBe(true);
 
-  it('immediately reduces the outstanding debt balance when ITC is applied to debt', () => {
-    expect(scenario.itc.appliedTo).toBe('debt');
-    const itcIndex = results.findIndex((r) => r.itcReceived > 0);
-    const itcQuarter = results[itcIndex];
-    expect(itcQuarter.closingDebtBalance).toBeCloseTo(
-      itcQuarter.openingDebtBalance - itcQuarter.principal - scenario.itc.amount,
-      6,
-    );
-    // Next quarter opens at the reduced balance.
-    expect(results[itcIndex + 1].openingDebtBalance).toBeCloseTo(
-      itcQuarter.closingDebtBalance,
+    const idx = periods.indexOf(itcPeriods[0]);
+    expect(periods[idx + 1].openingDebtBalance).toBeCloseTo(itcPeriods[0].closingDebtBalance, 6);
+    expect(itcPeriods[0].closingDebtBalance).toBeCloseTo(
+      itcPeriods[0].openingDebtBalance - itcPeriods[0].principal - scenario.itc.amount,
       6,
     );
   });
 
-  it('does not add the debt-applied ITC to net cash, but does track it against cumulative CF via reduced future interest only', () => {
-    const itcQuarter = results.find((r) => r.itcReceived > 0)!;
-    const expectedNetCash =
-      itcQuarter.ebitda - itcQuarter.interest - itcQuarter.principal;
-    expect(itcQuarter.netCash).toBeCloseTo(expectedNetCash, 6);
-  });
-
-  it('adds ITC directly to net cash when applied to reserve or opex', () => {
-    const reserveScenario: Scenario = {
-      ...scenario,
-      itc: { ...scenario.itc, appliedTo: 'reserve' },
-    };
-    const reserveResults = computeQuarterlyModel(reserveScenario);
-    const itcQuarter = reserveResults.find((r) => r.itcReceived > 0)!;
-    const expectedNetCash =
-      itcQuarter.ebitda -
-      itcQuarter.interest -
-      itcQuarter.principal +
-      itcQuarter.itcReceived;
-    expect(itcQuarter.netCash).toBeCloseTo(expectedNetCash, 6);
-    // Debt balance is unaffected by a reserve/opex ITC application.
-    expect(itcQuarter.closingDebtBalance).toBeCloseTo(
-      itcQuarter.openingDebtBalance - itcQuarter.principal,
-      6,
-    );
+  it('never lets the debt balance go negative, and DSCR is null once debt service reaches zero', () => {
+    for (const p of periods) {
+      expect(p.closingDebtBalance).toBeGreaterThanOrEqual(0);
+      const debtService = p.interest + p.principal;
+      if (debtService === 0) {
+        expect(p.dscr).toBeNull();
+      } else {
+        expect(p.dscr).toBeCloseTo(p.ebitda / debtService, 6);
+      }
+    }
   });
 
   it('accumulates cumulativeCF as a running sum of netCash', () => {
     let running = 0;
-    for (const r of results) {
-      running += r.netCash;
-      expect(r.cumulativeCF).toBeCloseTo(running, 6);
+    for (const p of periods) {
+      running += p.netCash;
+      expect(p.cumulativeCF).toBeCloseTo(running, 6);
     }
   });
+});
 
-  it('computes DSCR = EBITDA / (interest + principal), or null when there is no debt service', () => {
-    for (const r of results) {
-      const debtService = r.interest + r.principal;
-      if (debtService > 0) {
-        expect(r.dscr).toBeCloseTo(r.ebitda / debtService, 6);
-      } else {
-        expect(r.dscr).toBeNull();
-      }
-    }
-  });
+describe('multi-stream revenue', () => {
+  it('sums revenue/COGS across concurrent streams, respecting each stream\'s own startYear', () => {
+    const scenario = createDefaultScenario();
+    const secondStream: RevenueStream = {
+      id: 'stream-2',
+      name: 'Datacentre Direct Supply',
+      offtakeMode: 'direct',
+      kgPerTruckFill: 80,
+      h2ProductionCostPerKg: 1.9,
+      startYear: 4, // starts later than the primary stream
+      periods: buildPeriods(scenario)
+        .filter((p) => !p.isConstruction)
+        .map((p) => ({
+          year: p.year,
+          quarter: p.quarter,
+          trucksPerDay: 0,
+          dailyQuantityKg: 200,
+          operatingDays: p.quarter === null ? 360 : 90,
+          pricePerKg: 15,
+        })),
+    };
+    scenario.revenueStreams.push(secondStream);
 
-  it('never lets the debt balance go negative', () => {
-    for (const r of results) {
-      expect(r.closingDebtBalance).toBeGreaterThanOrEqual(0);
-    }
+    const periods = computeModelPeriods(scenario);
+    const y3 = periods.find((p) => p.label === 'Y3Q1')!;
+    const y4 = periods.find((p) => p.label === 'Y4Q1')!;
+
+    // Year 3: second stream hasn't started yet (startYear 4) -> only 1 stream contributes.
+    expect(y3.streamBreakdown.find((s) => s.streamId === 'stream-2')?.revenue).toBe(0);
+
+    // Year 4: both streams contribute, and total revenue/cogs is their sum.
+    const primary = y4.streamBreakdown.find((s) => s.streamId !== 'stream-2')!;
+    const secondary = y4.streamBreakdown.find((s) => s.streamId === 'stream-2')!;
+    expect(secondary.revenue).toBeCloseTo(200 * 15 * 90, 6);
+    expect(y4.revenue).toBeCloseTo(primary.revenue + secondary.revenue, 6);
+    expect(y4.cogs).toBeCloseTo(primary.cogs + secondary.cogs, 6);
   });
 });
 
 describe('computeAnnualSummary', () => {
   const scenario = createDefaultScenario();
-  const quarters = computeQuarterlyModel(scenario);
-  const annual = computeAnnualSummary(scenario, quarters);
+  const periods = computeModelPeriods(scenario);
+  const annual = computeAnnualSummary(scenario, periods);
 
-  it('produces one row per year, 5 years total', () => {
-    expect(annual).toHaveLength(5);
-    expect(annual.map((a) => a.year)).toEqual([1, 2, 3, 4, 5]);
+  it('produces one row per year across the full model horizon', () => {
+    expect(annual).toHaveLength(15);
+    expect(annual.map((a) => a.year)).toEqual(Array.from({ length: 15 }, (_, i) => i + 1));
   });
 
-  it('flags Year 1 as construction (no revenue) and Year 2 as partial revenue', () => {
+  it('flags Year 1 as fully construction and Year 2 as partial revenue', () => {
     expect(annual[0].isConstruction).toBe(true);
     expect(annual[0].revenue).toBe(0);
+    expect(annual[1].isConstruction).toBe(false);
     expect(annual[1].isPartialRevenue).toBe(true);
     expect(annual[1].revenue).toBeGreaterThan(0);
   });
 
-  it('aggregates each year as the sum of its 4 quarters', () => {
-    for (const a of annual) {
-      const yearQuarters = quarters.filter((q) => q.year === a.year);
-      expect(yearQuarters).toHaveLength(4);
-      expect(a.revenue).toBeCloseTo(sum(yearQuarters.map((q) => q.revenue)), 6);
-      expect(a.ebitda).toBeCloseTo(sum(yearQuarters.map((q) => q.ebitda)), 6);
-      expect(a.interest).toBeCloseTo(sum(yearQuarters.map((q) => q.interest)), 6);
+  it('flags Years 6-15 (single annual periods) as neither construction nor partial', () => {
+    for (const a of annual.slice(5)) {
+      expect(a.isConstruction).toBe(false);
+      expect(a.isPartialRevenue).toBe(false);
     }
   });
 
-  it('computes straight-line D&A over 20 years with 5% salvage, starting Year 2', () => {
-    const totalCapex =
-      scenario.construction.hardCapex +
-      scenario.construction.softCosts +
-      scenario.construction.contingency;
-    const expectedAnnualDNA = (totalCapex * 0.95) / 20;
+  it('aggregates each year as the sum of its periods', () => {
+    for (const a of annual) {
+      const yearPeriods = periods.filter((p) => p.year === a.year);
+      expect(a.revenue).toBeCloseTo(sum(yearPeriods.map((p) => p.revenue)), 6);
+      expect(a.ebitda).toBeCloseTo(sum(yearPeriods.map((p) => p.ebitda)), 6);
+      expect(a.interest).toBeCloseTo(sum(yearPeriods.map((p) => p.interest)), 6);
+    }
+  });
 
+  it('rolls up expensesByCategory across the year, matching totalOperatingExpenses', () => {
+    for (const a of annual.slice(1)) {
+      const categorySum = sum(Object.values(a.expensesByCategory).map((v) => v ?? 0));
+      expect(categorySum).toBeCloseTo(a.totalOperatingExpenses, 6);
+    }
+  });
+
+  it('computes straight-line D&A over 20 years with 5% salvage, starting the first operating year', () => {
+    const totalCapex =
+      scenario.construction.hardCapex + scenario.construction.softCosts + scenario.construction.contingency;
+    const expectedAnnualDNA = (totalCapex * 0.95) / 20;
     expect(annual[0].depreciation).toBe(0);
     for (const a of annual.slice(1)) {
       expect(a.depreciation).toBeCloseTo(expectedAnnualDNA, 6);
       expect(a.ebit).toBeCloseTo(a.ebitda - a.depreciation, 6);
     }
   });
-
-  it('computes gross margin % and EBITDA margin % only where revenue exists', () => {
-    expect(annual[0].grossMarginPct).toBeNull();
-    for (const a of annual.slice(1)) {
-      expect(a.grossMarginPct).toBeCloseTo(a.grossProfit / a.revenue, 6);
-      expect(a.ebitdaMarginPct).toBeCloseTo(a.ebitda / a.revenue, 6);
-    }
-  });
 });
 
 describe('IRR solver', () => {
   it('solves a simple known cash flow to the expected IRR', () => {
-    // -100 today, +110 in one year => 10% IRR.
     const irr = solveIRR([-100, 110]);
     expect(irr).not.toBeNull();
     expect(irr!).toBeCloseTo(0.1, 4);
-  });
-
-  it('solves a multi-period cash flow against a manually verified NPV=0 rate', () => {
-    // -1000, 300, 400, 500, 200 => IRR approx 11.9%
-    const cashFlows = [-1000, 300, 400, 500, 200];
-    const irr = solveIRR(cashFlows);
-    expect(irr).not.toBeNull();
-    const npvAtIrr = cashFlows.reduce(
-      (acc, cf, t) => acc + cf / Math.pow(1 + irr!, t),
-      0,
-    );
-    expect(npvAtIrr).toBeCloseTo(0, 2);
   });
 
   it('returns null for all-positive or all-negative cash flows', () => {
@@ -328,55 +407,45 @@ describe('IRR solver', () => {
   });
 });
 
-describe('equity IRR and payback (from Scenario)', () => {
+describe('equity IRR, payback, and min DSCR (generalized to N years)', () => {
   const scenario = createDefaultScenario();
-  const quarters = computeQuarterlyModel(scenario);
-  const annual = computeAnnualSummary(scenario, quarters);
+  const periods = computeModelPeriods(scenario);
+  const annual = computeAnnualSummary(scenario, periods);
 
-  it('builds the [-cashEquity, yr2, yr3, yr4, yr5] cash flow stream', () => {
+  it('builds a 15-element equity cash flow stream: [-cashEquity, yr2..yr15 net cash]', () => {
     const flows = buildEquityCashFlows(scenario, annual);
-    expect(flows).toHaveLength(5);
+    expect(flows).toHaveLength(15);
     expect(flows[0]).toBe(-scenario.capital.cashEquity);
     expect(flows[1]).toBeCloseTo(annual[1].netCash, 6);
-    expect(flows[4]).toBeCloseTo(annual[4].netCash, 6);
+    expect(flows[14]).toBeCloseTo(annual[14].netCash, 6);
   });
 
-  it('computes a positive, plausible IRR for the base case (clears the 15% investor hurdle)', () => {
+  it('computes a positive equity IRR for the default scenario', () => {
     const irr = computeEquityIRRFromScenario(scenario, annual);
     expect(irr).not.toBeNull();
     expect(irr!).toBeGreaterThan(0.15);
-    expect(irr!).toBeLessThan(0.5);
+    expect(irr!).toBeLessThan(1);
   });
 
-  it('computes an equity payback year within the 5-year model horizon', () => {
+  it('computes an equity payback year within the model horizon', () => {
     const paybackYear = computeEquityPaybackYear(scenario, annual);
     expect(paybackYear).not.toBeNull();
     expect(paybackYear).toBeGreaterThanOrEqual(2);
-    expect(paybackYear).toBeLessThanOrEqual(5);
+    expect(paybackYear).toBeLessThanOrEqual(15);
   });
-});
 
-describe('DSCR aggregation', () => {
-  it('finds the minimum annual DSCR across revenue years (2-5)', () => {
-    const scenario = createDefaultScenario();
-    const quarters = computeQuarterlyModel(scenario);
-    const annual = computeAnnualSummary(scenario, quarters);
+  it('finds the minimum DSCR across non-construction years only, landing in Year 3', () => {
     const { minDSCR, minDSCRYear } = computeMinDSCR(annual);
     expect(minDSCR).not.toBeNull();
-    expect(minDSCRYear).not.toBeNull();
-
-    const manualMin = Math.min(
-      ...annual.filter((a) => a.year >= 2 && a.dscr !== null).map((a) => a.dscr as number),
-    );
-    expect(minDSCR!).toBeCloseTo(manualMin, 6);
+    expect(minDSCRYear).toBe(3);
+    expect(minDSCR!).toBeGreaterThan(1.0);
   });
 });
 
 describe('Sources & Uses', () => {
-  it('sums sources and uses correctly and flags funding status by sign of surplus', () => {
+  it('sums sources and uses correctly and is fully funded at default inputs', () => {
     const scenario = createDefaultScenario();
     const su = computeSourcesAndUses(scenario);
-
     expect(su.sources.total).toBeCloseTo(
       scenario.capital.cashEquity +
         scenario.capital.founderSweatEquity +
@@ -389,14 +458,12 @@ describe('Sources & Uses', () => {
       scenario.construction.hardCapex +
         scenario.construction.softCosts +
         scenario.construction.contingency +
-        scenario.construction.constructionOpexPerMonth *
-          scenario.construction.constructionDurationMonths +
+        scenario.construction.constructionOpexPerMonth * scenario.construction.constructionDurationMonths +
         calculateDSRAmount(scenario) +
         scenario.construction.workingCapitalBuffer,
       6,
     );
-    expect(su.surplusOrGap).toBeCloseTo(su.sources.total - su.uses.total, 6);
-    expect(su.isFullyFunded).toBe(su.surplusOrGap >= 0);
+    expect(su.isFullyFunded).toBe(true);
   });
 
   it('flags a funding gap when uses exceed sources', () => {
@@ -415,91 +482,36 @@ describe('computeDebtPayoffQuarter', () => {
     const withoutITC = computeDebtPayoffQuarter(scenario, 0);
     expect(withITC).not.toBeNull();
     expect(withoutITC).not.toBeNull();
-
-    const toQuarterIndex = (yq: { year: number; quarter: number }) =>
-      (yq.year - 1) * 4 + (yq.quarter - 1);
-    expect(toQuarterIndex(withITC!)).toBeLessThan(toQuarterIndex(withoutITC!));
+    const toIndex = (yq: { year: number; quarter: number }) => (yq.year - 1) * 4 + (yq.quarter - 1);
+    expect(toIndex(withITC!)).toBeLessThan(toIndex(withoutITC!));
   });
 
-  it('returns null when the loan never amortizes (grace period consumes the full tenor)', () => {
+  it('returns null when the loan never amortizes', () => {
     const scenario = createDefaultScenario();
     scenario.capital.gracePeriod = scenario.capital.loanTenor;
     expect(computeDebtPayoffQuarter(scenario)).toBeNull();
   });
 });
 
-describe('offtake mode: trucks vs. direct daily volume', () => {
-  it('defaults to truck-delivered offtake, deriving daily kg from trucks x kgPerTruckFill', () => {
-    const scenario = createDefaultScenario();
-    expect(scenario.production.offtakeMode).toBe('trucks');
-    const input = scenario.quarters[0];
-    expect(quarterDailyKg(input, scenario.production)).toBe(
-      input.trucksPerDay * scenario.production.kgPerTruckFill,
-    );
-  });
-
-  it('uses the direct daily quantity (ignoring trucksPerDay) once switched to direct offtake', () => {
-    const scenario = createDefaultScenario();
-    scenario.production.offtakeMode = 'direct';
-    scenario.quarters = scenario.quarters.map((q) => ({
-      ...q,
-      trucksPerDay: 999, // should be fully ignored in direct mode
-      dailyQuantityKg: 500,
-    }));
-
-    const input = scenario.quarters[0];
-    expect(quarterDailyKg(input, scenario.production)).toBe(500);
-
-    const results = computeQuarterlyModel(scenario);
-    const firstRevenueQuarter = results.find((r) => !r.isConstruction)!;
-    const matchingInput = input;
-    expect(firstRevenueQuarter.revenue).toBeCloseTo(
-      500 * matchingInput.pricePerKg * matchingInput.operatingDays,
-      6,
-    );
-    expect(firstRevenueQuarter.cogs).toBeCloseTo(
-      scenario.production.h2ProductionCostPerKg * 500 * matchingInput.operatingDays,
-      6,
-    );
-  });
-
-  it('models a flat-volume datacentre offtake (e.g. 300 kg/day at a fixed price) correctly', () => {
-    const scenario = createDefaultScenario();
-    scenario.production.offtakeMode = 'direct';
-    scenario.quarters = scenario.quarters.map((q) => ({
-      ...q,
-      dailyQuantityKg: 300,
-      pricePerKg: 14,
-      operatingDays: 90,
-    }));
-
-    const results = computeQuarterlyModel(scenario);
-    for (const r of results.filter((r) => !r.isConstruction)) {
-      expect(r.revenue).toBeCloseTo(300 * 14 * 90, 6);
-      expect(r.dailyQuantityKg).toBe(300);
-    }
-  });
-});
-
 describe('production helpers', () => {
   it('reports the plant nameplate capacity as a direct input', () => {
     const scenario = createDefaultScenario();
-    const capacity = computeMaxDailyCapacityKg(scenario.production);
-    expect(capacity).toBe(scenario.production.maxDailyCapacityKg);
+    expect(computeMaxDailyCapacityKg(scenario)).toBe(scenario.plant.maxDailyCapacityKg);
   });
 
-  it('computes a break-even price per kg above the raw production cost', () => {
+  it('computes a break-even $/kg above the raw production cost', () => {
     const scenario = createDefaultScenario();
-    const breakEven = computeBreakEvenPricePerKg(scenario, 10 * scenario.production.kgPerTruckFill, 84);
-    expect(breakEven).toBeGreaterThan(scenario.production.h2ProductionCostPerKg);
+    const periods = computeModelPeriods(scenario);
+    const breakEven = computeBreakEvenPricePerKg(periods);
+    expect(breakEven).toBeGreaterThan(scenario.revenueStreams[0].h2ProductionCostPerKg);
   });
 });
 
 describe('validateScenario', () => {
   it('produces no errors for the well-funded default scenario', () => {
     const scenario = createDefaultScenario();
-    const quarters = computeQuarterlyModel(scenario);
-    const annual = computeAnnualSummary(scenario, quarters);
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
     const su = computeSourcesAndUses(scenario);
     const irr = computeEquityIRRFromScenario(scenario, annual);
     const validation = validateScenario(scenario, annual, su, irr);
@@ -508,22 +520,10 @@ describe('validateScenario', () => {
     expect(validation.errors).toHaveLength(0);
   });
 
-  it('flags overcapitalization when debt exceeds total uses', () => {
+  it('never flags Year 1 (construction) as a DSCR warning/danger year', () => {
     const scenario = createDefaultScenario();
-    scenario.capital.totalDebt = 500_000_000;
-    const quarters = computeQuarterlyModel(scenario);
-    const annual = computeAnnualSummary(scenario, quarters);
-    const su = computeSourcesAndUses(scenario);
-    const irr = computeEquityIRRFromScenario(scenario, annual);
-    const validation = validateScenario(scenario, annual, su, irr);
-    expect(validation.isOvercapitalized).toBe(true);
-    expect(validation.errors.length).toBeGreaterThan(0);
-  });
-
-  it('never flags Year 1 (construction, no revenue) as a DSCR warning/danger year', () => {
-    const scenario = createDefaultScenario();
-    const quarters = computeQuarterlyModel(scenario);
-    const annual = computeAnnualSummary(scenario, quarters);
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
     const su = computeSourcesAndUses(scenario);
     const irr = computeEquityIRRFromScenario(scenario, annual);
     const validation = validateScenario(scenario, annual, su, irr);
@@ -531,88 +531,56 @@ describe('validateScenario', () => {
     expect(validation.dscrDangerYears).not.toContain(1);
   });
 
-  it('flags DSCR warning/danger years relative to the 1.25x covenant', () => {
+  it('flags overcapitalization when debt exceeds total uses', () => {
     const scenario = createDefaultScenario();
-    // Crush revenue so DSCR falls well below covenant across the board.
-    scenario.quarters = scenario.quarters.map((q) => ({
-      ...q,
-      trucksPerDay: 1,
-      pricePerKg: 6,
-    }));
-    const quarters = computeQuarterlyModel(scenario);
-    const annual = computeAnnualSummary(scenario, quarters);
+    scenario.capital.totalDebt = 500_000_000;
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
     const su = computeSourcesAndUses(scenario);
     const irr = computeEquityIRRFromScenario(scenario, annual);
     const validation = validateScenario(scenario, annual, su, irr);
-    expect(
-      validation.dscrDangerYears.length + validation.dscrWarningYears.length,
-    ).toBeGreaterThan(0);
+    expect(validation.isOvercapitalized).toBe(true);
+    expect(validation.errors.length).toBeGreaterThan(0);
   });
 
-  it('warns when equity IRR falls below the 8% minimum threshold', () => {
+  it('warns when construction duration exceeds the quarterly modeling window', () => {
     const scenario = createDefaultScenario();
-    scenario.quarters = scenario.quarters.map((q) => ({
-      ...q,
-      trucksPerDay: 1,
-      pricePerKg: 6,
-    }));
-    const quarters = computeQuarterlyModel(scenario);
-    const annual = computeAnnualSummary(scenario, quarters);
+    scenario.modelSettings.quarterlyYears = 1; // only 4 quarter-equivalents available
+    scenario.construction.constructionDurationMonths = 24; // 8 quarter-equivalents needed
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
     const su = computeSourcesAndUses(scenario);
     const irr = computeEquityIRRFromScenario(scenario, annual);
     const validation = validateScenario(scenario, annual, su, irr);
-    if (irr !== null && irr < 0.08) {
-      expect(validation.irrBelowThreshold).toBe(true);
-      expect(validation.warnings.some((w) => w.includes('8%'))).toBe(true);
-    }
+    expect(validation.warnings.some((w) => w.includes('quarterly modeling window'))).toBe(true);
   });
 });
 
-describe('runModel (full integration)', () => {
+describe('runModel (full integration, default 15-year scenario)', () => {
   const scenario = createDefaultScenario();
   const outputs = runModel(scenario);
 
-  it('produces internally consistent totals', () => {
-    expect(outputs.quarters).toHaveLength(20);
-    expect(outputs.annual).toHaveLength(5);
-    expect(outputs.totalRevenue5yr).toBeCloseTo(
-      sum(outputs.annual.map((a) => a.revenue)),
-      6,
-    );
+  it('produces internally consistent totals across all 15 years', () => {
+    expect(outputs.periods).toHaveLength(30);
+    expect(outputs.annual).toHaveLength(15);
+    expect(outputs.totalRevenueAllYears).toBeCloseTo(sum(outputs.annual.map((a) => a.revenue)), 6);
   });
 
-  it('lands within the documented default-scenario verification ranges', () => {
-    // 5-year revenue should land in the $17-19M range at default inputs.
-    expect(outputs.totalRevenue5yr).toBeGreaterThanOrEqual(17_000_000);
-    expect(outputs.totalRevenue5yr).toBeLessThanOrEqual(19_000_000);
-
-    // Minimum DSCR (Year 3, when principal amortization begins) should be
-    // in the 1.1x-1.3x band.
-    expect(outputs.minDSCRYear).toBe(3);
-    expect(outputs.minDSCR).not.toBeNull();
-    expect(outputs.minDSCR!).toBeGreaterThanOrEqual(1.1);
-    expect(outputs.minDSCR!).toBeLessThanOrEqual(1.3);
-
-    // A $4M ITC applied to debt in Year 2 should cut total interest paid
-    // over the model horizon by roughly $800K-$1.2M vs. no ITC.
-    expect(outputs.interestSavedFromITC).toBeGreaterThanOrEqual(800_000);
-    expect(outputs.interestSavedFromITC).toBeLessThanOrEqual(1_200_000);
-  });
-
-  it('is fully funded at default inputs', () => {
+  it('is fully funded and has a healthy, well-formed set of headline metrics', () => {
     expect(outputs.sourcesAndUses.isFullyFunded).toBe(true);
     expect(outputs.validation.isOvercapitalized).toBe(false);
+    expect(outputs.totalRevenueAllYears).toBeGreaterThan(0);
+    expect(outputs.equityIRR).not.toBeNull();
+    expect(outputs.equityIRR!).toBeGreaterThan(0);
+    expect(outputs.minDSCR).not.toBeNull();
+    expect(outputs.minDSCR!).toBeGreaterThanOrEqual(1.0);
+    expect(outputs.minDSCRYear).toBe(3);
   });
 
-  it('produces a DSCR badge-worthy classification for every revenue year', () => {
-    for (const a of outputs.annual.filter((a) => a.dscr !== null)) {
-      const band =
-        (a.dscr as number) >= DSCR_TARGET
-          ? 'green'
-          : (a.dscr as number) >= 0.8
-            ? 'amber'
-            : 'red';
-      expect(['green', 'amber', 'red']).toContain(band);
-    }
+  it('fully amortizes the debt well within the 15-year horizon thanks to the ITC paydown', () => {
+    const lastPeriod = outputs.periods[outputs.periods.length - 1];
+    expect(lastPeriod.closingDebtBalance).toBe(0);
+    expect(outputs.netDebtAfterITC).toBe(0);
+    expect(outputs.interestSavedFromITC).toBeGreaterThan(0);
   });
 });

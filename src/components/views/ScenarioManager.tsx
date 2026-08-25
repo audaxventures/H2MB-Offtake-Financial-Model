@@ -193,19 +193,19 @@ export function ScenarioManager({ open, onOpenChange }: ScenarioManagerProps) {
                   </thead>
                   <tbody>
                     <ComparisonRow
-                      label="Revenue (5yr)"
+                      label="Total Revenue"
                       rows={comparisonRows}
-                      render={(o) => formatCurrencyCompact(o.totalRevenue5yr)}
+                      render={(o) => formatCurrencyCompact(o.totalRevenueAllYears)}
                     />
                     <ComparisonRow
-                      label="EBITDA (5yr)"
+                      label="Total EBITDA"
                       rows={comparisonRows}
                       render={(o) => formatCurrencyCompact(o.annual.reduce((acc, a) => acc + a.ebitda, 0))}
                     />
                     <ComparisonRow
-                      label="Net Cash (5yr)"
+                      label="Total Net Cash"
                       rows={comparisonRows}
-                      render={(o) => formatCurrencyCompact(o.totalNetCash5yr)}
+                      render={(o) => formatCurrencyCompact(o.totalNetCashAllYears)}
                     />
                     <ComparisonRow
                       label="Equity IRR"

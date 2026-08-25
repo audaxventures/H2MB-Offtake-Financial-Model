@@ -5,7 +5,7 @@ import { AlertBanner } from '@/components/shared/AlertBanner';
 import {
   computeDebtPayoffQuarter,
   computeEquityIRRFromScenario,
-  quarterLabel,
+  periodLabel,
   runModel,
 } from '@/engine/calculations';
 import { formatCurrency, formatCurrencyCompact, formatPercent } from '@/engine/formatters';
@@ -134,13 +134,13 @@ export function SourcesAndUses() {
               />
               <ComparisonRow
                 label="Debt Paid Off By"
-                withValue={payoffWithITC ? quarterLabel(payoffWithITC.year, payoffWithITC.quarter) : 'Beyond horizon'}
-                withoutValue={payoffWithoutITC ? quarterLabel(payoffWithoutITC.year, payoffWithoutITC.quarter) : 'Beyond horizon'}
+                withValue={payoffWithITC ? periodLabel(payoffWithITC.year, payoffWithITC.quarter) : 'Beyond horizon'}
+                withoutValue={payoffWithoutITC ? periodLabel(payoffWithoutITC.year, payoffWithoutITC.quarter) : 'Beyond horizon'}
               />
               <ComparisonRow
-                label="Total Net Cash (5yr)"
-                withValue={formatCurrency(outputs.totalNetCash5yr)}
-                withoutValue={formatCurrency(noItcOutputs.totalNetCash5yr)}
+                label={`Total Net Cash (${current.modelSettings.totalYears}yr)`}
+                withValue={formatCurrency(outputs.totalNetCashAllYears)}
+                withoutValue={formatCurrency(noItcOutputs.totalNetCashAllYears)}
               />
               <ComparisonRow
                 label="Equity IRR"

@@ -1,10 +1,13 @@
-import { createDefaultQuarters } from './calculations';
 import { generateId } from '../lib/id';
 import type {
   CapitalStructure,
   ConstructionCosts,
+  ExpenseLineItem,
   ITCSettings,
-  ProductionSettings,
+  ModelSettings,
+  PeriodRevenueInput,
+  PlantSettings,
+  RevenueStream,
   Scenario,
 } from './types';
 
@@ -34,17 +37,155 @@ export const DEFAULT_ITC: ITCSettings = {
   appliedTo: 'debt',
 };
 
-export const DEFAULT_PRODUCTION: ProductionSettings = {
-  offtakeMode: 'trucks',
-  kgPerTruckFill: 80,
+export const DEFAULT_PLANT: PlantSettings = {
   maxDailyCapacityKg: 1_000,
-  h2ProductionCostPerKg: 2.41,
-  expenseEscalationRate: 0.025,
-  year5PlusPricePerKg: 12.0,
-  year5PlusAnnualExpenses: 1_000_000,
 };
 
+export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
+  totalYears: 15,
+  quarterlyYears: 5,
+};
+
+/**
+ * Builds the period template (quarters for years 2..quarterlyYears, one
+ * annual period per year for quarterlyYears+1..totalYears) for the default
+ * revenue stream, using the same Year 2-5 ramp values validated in earlier
+ * releases and a flat steady-state continuation through Year 15.
+ */
+function createDefaultStreamPeriods(modelSettings: ModelSettings): PeriodRevenueInput[] {
+  const { quarterlyYears, totalYears } = modelSettings;
+  const quarterlyRamp: Record<
+    number,
+    { trucks: number; days: number; price: number }
+  > = {
+    2: { trucks: 11, days: 92, price: 19 },
+    3: { trucks: 10, days: 83, price: 13.5 },
+    4: { trucks: 12, days: 92, price: 16 },
+    5: { trucks: 12, days: 92, price: 12 },
+  };
+
+  const periods: PeriodRevenueInput[] = [];
+
+  for (let year = 2; year <= quarterlyYears; year++) {
+    const ramp = quarterlyRamp[year] ?? quarterlyRamp[5];
+    const quarters = year === 2 ? [2, 3, 4] : [1, 2, 3, 4];
+    for (const quarter of quarters) {
+      periods.push({
+        year,
+        quarter,
+        trucksPerDay: ramp.trucks,
+        dailyQuantityKg: ramp.trucks * 80,
+        operatingDays: ramp.days,
+        pricePerKg: ramp.price,
+      });
+    }
+  }
+
+  for (let year = quarterlyYears + 1; year <= totalYears; year++) {
+    periods.push({
+      year,
+      quarter: null,
+      trucksPerDay: 12,
+      dailyQuantityKg: 12 * 80,
+      operatingDays: 355,
+      pricePerKg: 12,
+    });
+  }
+
+  return periods;
+}
+
+export function createDefaultRevenueStream(modelSettings: ModelSettings): RevenueStream {
+  return {
+    id: generateId(),
+    name: 'Truck Fleet — Class 8 FCET',
+    offtakeMode: 'trucks',
+    kgPerTruckFill: 80,
+    h2ProductionCostPerKg: 2.41,
+    startYear: 2,
+    periods: createDefaultStreamPeriods(modelSettings),
+  };
+}
+
+export function createDefaultExpenseLineItems(): ExpenseLineItem[] {
+  return [
+    {
+      id: generateId(),
+      name: 'Payroll & Benefits',
+      category: 'payroll',
+      startYear: 2,
+      baseAnnualAmount: 600_000,
+      escalation: { type: 'percentGrowth', growthRate: 0.03 },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'General & Administrative',
+      category: 'ga',
+      startYear: 2,
+      baseAnnualAmount: 150_000,
+      escalation: { type: 'percentGrowth', growthRate: 0.02 },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'Property & Liability Insurance',
+      category: 'insurance',
+      startYear: 2,
+      baseAnnualAmount: 90_000,
+      escalation: { type: 'percentGrowth', growthRate: 0.025 },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'Repairs & Maintenance',
+      category: 'maintenance',
+      startYear: 2,
+      baseAnnualAmount: 0,
+      escalation: { type: 'percentOfRevenue', percentOfRevenue: 0.025 },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'Facility Utilities (non-production)',
+      category: 'utilities',
+      startYear: 2,
+      baseAnnualAmount: 60_000,
+      escalation: { type: 'percentGrowth', growthRate: 0.02 },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'Sales & Marketing',
+      category: 'salesMarketing',
+      startYear: 2,
+      baseAnnualAmount: 80_000,
+      escalation: { type: 'flat' },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'Professional & Legal Fees',
+      category: 'professionalFees',
+      startYear: 2,
+      baseAnnualAmount: 120_000,
+      escalation: { type: 'flat' },
+      yearOverrides: {},
+    },
+    {
+      id: generateId(),
+      name: 'Other Operating Expenses',
+      category: 'other',
+      startYear: 2,
+      baseAnnualAmount: 50_000,
+      escalation: { type: 'flat' },
+      yearOverrides: {},
+    },
+  ];
+}
+
 export function createDefaultScenario(name = 'Base Case'): Scenario {
+  const modelSettings = { ...DEFAULT_MODEL_SETTINGS };
   return {
     id: generateId(),
     name,
@@ -52,7 +193,9 @@ export function createDefaultScenario(name = 'Base Case'): Scenario {
     capital: { ...DEFAULT_CAPITAL },
     construction: { ...DEFAULT_CONSTRUCTION },
     itc: { ...DEFAULT_ITC },
-    production: { ...DEFAULT_PRODUCTION },
-    quarters: createDefaultQuarters(DEFAULT_PRODUCTION),
+    plant: { ...DEFAULT_PLANT },
+    modelSettings,
+    revenueStreams: [createDefaultRevenueStream(modelSettings)],
+    expenseLineItems: createDefaultExpenseLineItems(),
   };
 }

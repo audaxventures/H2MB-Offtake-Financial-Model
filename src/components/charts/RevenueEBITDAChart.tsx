@@ -23,7 +23,7 @@ export function RevenueEBITDAChart({ annual, itcReceivedYear }: RevenueEBITDACha
     year: `Year ${a.year}`,
     Revenue: a.revenue,
     EBITDA: a.ebitda,
-    'Total Costs': a.cogs + a.companyExpenses + a.interest + a.principal,
+    'Total Costs': a.cogs + a.totalOperatingExpenses + a.interest + a.principal,
   }));
 
   const itcPoint = data.find((_, idx) => annual[idx].year === itcReceivedYear);

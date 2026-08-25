@@ -1,6 +1,7 @@
 import XLSX from 'xlsx-js-style';
 import { DSCR_DANGER, DSCR_TARGET } from '@/engine/calculations';
-import type { ModelOutputs, Scenario } from '@/engine/types';
+import { EXPENSE_CATEGORY_LABELS } from '@/engine/types';
+import type { ExpenseCategory, ModelOutputs, Scenario } from '@/engine/types';
 
 const NAVY = '1F4E79';
 const WHITE = 'FFFFFF';
@@ -67,6 +68,12 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   const line = (label: string, value: number, numFmt = CURRENCY_FMT) =>
     rows.push([cell(label), cell(value, inputStyle, numFmt)]);
 
+  section('Model Settings');
+  line('Model Horizon (years)', scenario.modelSettings.totalYears, '0');
+  line('Quarterly Detail Years', scenario.modelSettings.quarterlyYears, '0');
+  line('Max Daily Capacity (kg)', scenario.plant.maxDailyCapacityKg, '0');
+  rows.push([]);
+
   section('Capital Structure');
   line('Cash Equity', scenario.capital.cashEquity);
   line('Founder / Sweat Equity', scenario.capital.founderSweatEquity);
@@ -93,33 +100,47 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   rows.push([cell('Applied To'), cell(scenario.itc.appliedTo, { ...inputStyle, ...goldFillStyle })]);
   rows.push([]);
 
-  section('Production & Steady-State');
-  rows.push([
-    cell('Offtake Type'),
-    cell(scenario.production.offtakeMode === 'direct' ? 'Direct Daily Volume' : 'Truck Delivery', inputStyle),
-  ]);
-  if (scenario.production.offtakeMode === 'trucks') {
-    line('Kg per Truck Fill', scenario.production.kgPerTruckFill, '0');
+  section('Revenue Streams');
+  for (const stream of scenario.revenueStreams) {
+    rows.push([cell(stream.name, boldStyle)]);
+    rows.push([
+      cell('  Offtake Type'),
+      cell(stream.offtakeMode === 'direct' ? 'Direct Daily Volume' : 'Truck Delivery', inputStyle),
+    ]);
+    if (stream.offtakeMode === 'trucks') {
+      rows.push([cell('  Kg per Truck Fill'), cell(stream.kgPerTruckFill, inputStyle, '0')]);
+    }
+    rows.push([cell('  H2 Production Cost / kg'), cell(stream.h2ProductionCostPerKg, inputStyle, CURRENCY_FMT)]);
+    rows.push([cell('  Start Year'), cell(stream.startYear, inputStyle, '0')]);
   }
-  line('Max Daily Capacity (kg)', scenario.production.maxDailyCapacityKg, '0');
-  line('H2 Production Cost / kg', scenario.production.h2ProductionCostPerKg, CURRENCY_FMT);
-  line('Expense Escalation Rate', scenario.production.expenseEscalationRate, PERCENT_FMT);
-  line('Year 5+ Price / kg', scenario.production.year5PlusPricePerKg, CURRENCY_FMT);
-  line('Year 5+ Annual Expenses', scenario.production.year5PlusAnnualExpenses);
+  rows.push([]);
 
-  return buildSheet(rows, [34, 20]);
+  section('Expense Line Items');
+  for (const item of scenario.expenseLineItems) {
+    const escalationDesc =
+      item.escalation.type === 'percentGrowth'
+        ? `${((item.escalation.growthRate ?? 0) * 100).toFixed(2)}%/yr growth`
+        : item.escalation.type === 'percentOfRevenue'
+          ? `${((item.escalation.percentOfRevenue ?? 0) * 100).toFixed(2)}% of revenue`
+          : item.escalation.type === 'manual'
+            ? 'Manual per-year'
+            : 'Flat';
+    rows.push([cell(item.name, boldStyle), cell(`${EXPENSE_CATEGORY_LABELS[item.category]} · ${escalationDesc}`)]);
+    rows.push([cell('  Base Annual Amount'), cell(item.baseAnnualAmount, inputStyle, CURRENCY_FMT)]);
+    rows.push([cell('  Start Year'), cell(item.startYear, inputStyle, '0')]);
+  }
+
+  return buildSheet(rows, [34, 26]);
 }
 
-function buildQuarterlySheet(outputs: ModelOutputs): XLSX.WorkSheet {
+function buildPeriodSheet(outputs: ModelOutputs): XLSX.WorkSheet {
   const headers = [
-    'Quarter',
-    'Daily Qty (kg)',
+    'Period',
+    'Total Daily Kg',
     'Op.Days',
-    '$/kg',
     'Revenue',
     'Gross Profit',
-    'Expenses (qtr)',
-    'Annual Budget',
+    'Operating Exp.',
     'EBITDA',
     'Interest',
     'Principal',
@@ -131,36 +152,39 @@ function buildQuarterlySheet(outputs: ModelOutputs): XLSX.WorkSheet {
   ];
   const rows: XLSX.CellObject[][] = [headers.map((h) => cell(h, headerStyle))];
 
-  for (const q of outputs.quarters) {
-    const rowStyle: CellStyle = q.isConstruction
+  for (const p of outputs.periods) {
+    const rowStyle: CellStyle = p.isConstruction
       ? constructionFillStyle
-      : q.isITCQuarter
+      : p.isITCPeriod
         ? goldFillStyle
         : {};
+    const totalDailyKg = p.streamBreakdown.reduce((acc, s) => acc + s.dailyQuantityKg, 0);
+    const avgOperatingDays =
+      p.streamBreakdown.length > 0
+        ? p.streamBreakdown.reduce((acc, s) => acc + s.operatingDays, 0) / p.streamBreakdown.length
+        : 0;
     rows.push([
-      cell(q.label, rowStyle),
-      cell(q.isConstruction ? '' : q.dailyQuantityKg, rowStyle),
-      cell(q.isConstruction ? '' : q.operatingDays, rowStyle),
-      cell(q.isConstruction ? '' : q.pricePerKg, rowStyle, CURRENCY_FMT),
-      cell(q.revenue, rowStyle, CURRENCY_FMT),
-      cell(q.grossProfit, rowStyle, CURRENCY_FMT),
-      cell(q.quarterlyExpenses, rowStyle, CURRENCY_FMT),
-      cell(q.isConstruction ? '' : q.annualExpensesBudget, rowStyle, CURRENCY_FMT),
-      cell(q.ebitda, rowStyle, CURRENCY_FMT),
-      cell(q.interest, rowStyle, CURRENCY_FMT),
-      cell(q.principal, rowStyle, CURRENCY_FMT),
-      cell(q.itcReceived || '', { ...rowStyle, ...(q.itcReceived > 0 ? goldFillStyle : {}) }, CURRENCY_FMT),
-      cell(q.netCash, rowStyle, CURRENCY_FMT),
-      cell(q.cumulativeCF, rowStyle, CURRENCY_FMT),
-      cell(q.closingDebtBalance, rowStyle, CURRENCY_FMT),
-      cell(q.dscr ?? '', { ...rowStyle, ...dscrStyle(q.dscr) }, DSCR_FMT),
+      cell(p.label, rowStyle),
+      cell(p.isConstruction ? '' : totalDailyKg, rowStyle),
+      cell(p.isConstruction ? '' : Math.round(avgOperatingDays), rowStyle),
+      cell(p.revenue, rowStyle, CURRENCY_FMT),
+      cell(p.grossProfit, rowStyle, CURRENCY_FMT),
+      cell(p.totalOperatingExpenses, rowStyle, CURRENCY_FMT),
+      cell(p.ebitda, rowStyle, CURRENCY_FMT),
+      cell(p.interest, rowStyle, CURRENCY_FMT),
+      cell(p.principal, rowStyle, CURRENCY_FMT),
+      cell(p.itcReceived || '', { ...rowStyle, ...(p.itcReceived > 0 ? goldFillStyle : {}) }, CURRENCY_FMT),
+      cell(p.netCash, rowStyle, CURRENCY_FMT),
+      cell(p.cumulativeCF, rowStyle, CURRENCY_FMT),
+      cell(p.closingDebtBalance, rowStyle, CURRENCY_FMT),
+      cell(p.dscr ?? '', { ...rowStyle, ...dscrStyle(p.dscr) }, DSCR_FMT),
     ]);
   }
 
-  return buildSheet(rows, [8, 11, 9, 8, 13, 13, 14, 14, 13, 12, 12, 12, 13, 13, 14, 8]);
+  return buildSheet(rows, [8, 13, 9, 13, 13, 14, 13, 12, 12, 12, 13, 13, 14, 8]);
 }
 
-function buildAnnualSheet(outputs: ModelOutputs): XLSX.WorkSheet {
+function buildAnnualSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkSheet {
   const rows: XLSX.CellObject[][] = [];
   const yearHeaders = ['Line Item', ...outputs.annual.map((a) => `Year ${a.year}`)];
   rows.push(yearHeaders.map((h) => cell(h, headerStyle)));
@@ -176,11 +200,29 @@ function buildAnnualSheet(outputs: ModelOutputs): XLSX.WorkSheet {
       ...values.map((v) => cell(v ?? '', style, numFmt)),
     ]);
 
+  const usedCategories = Array.from(
+    new Set(
+      scenario.expenseLineItems.filter((i) => i.category !== 'cogs').map((i) => i.category),
+    ),
+  );
+
   line('Hydrogen Sales Revenue', outputs.annual.map((a) => a.revenue));
   line('Cost of Goods Sold', outputs.annual.map((a) => -a.cogs));
   line('Gross Profit', outputs.annual.map((a) => a.grossProfit), CURRENCY_FMT, boldStyle);
   line('Gross Margin %', outputs.annual.map((a) => a.grossMarginPct), PERCENT_FMT);
-  line('Company Expenses', outputs.annual.map((a) => -a.companyExpenses));
+  line('Pre-Revenue / Construction OpEx', outputs.annual.map((a) => -a.preRevenueOpex));
+  for (const category of usedCategories as ExpenseCategory[]) {
+    line(
+      EXPENSE_CATEGORY_LABELS[category],
+      outputs.annual.map((a) => -(a.expensesByCategory[category] ?? 0)),
+    );
+  }
+  line(
+    'Total Operating Expenses',
+    outputs.annual.map((a) => -(a.totalOperatingExpenses + a.preRevenueOpex)),
+    CURRENCY_FMT,
+    boldStyle,
+  );
   line('EBITDA', outputs.annual.map((a) => a.ebitda), CURRENCY_FMT, boldStyle);
   line('EBITDA Margin %', outputs.annual.map((a) => a.ebitdaMarginPct), PERCENT_FMT);
   line('D&A (20yr SL, 5% salvage)', outputs.annual.map((a) => -a.depreciation));
@@ -200,7 +242,8 @@ function buildAnnualSheet(outputs: ModelOutputs): XLSX.WorkSheet {
   line('Cumulative Cash Flow', outputs.annual.map((a) => a.cumulativeCF));
   line('Closing Debt Balance', outputs.annual.map((a) => a.closingDebtBalance));
 
-  return buildSheet(rows, [30, 14, 14, 14, 14, 14]);
+  const colWidths = [30, ...outputs.annual.map(() => 14)];
+  return buildSheet(rows, colWidths);
 }
 
 function buildSourcesUsesSheet(outputs: ModelOutputs): XLSX.WorkSheet {
@@ -234,8 +277,8 @@ function buildSourcesUsesSheet(outputs: ModelOutputs): XLSX.WorkSheet {
 export function exportToExcel(scenario: Scenario, outputs: ModelOutputs): void {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, buildAssumptionsSheet(scenario), 'Assumptions');
-  XLSX.utils.book_append_sheet(workbook, buildQuarterlySheet(outputs), 'Quarterly Model');
-  XLSX.utils.book_append_sheet(workbook, buildAnnualSheet(outputs), 'Annual Summary');
+  XLSX.utils.book_append_sheet(workbook, buildPeriodSheet(outputs), 'Period Detail');
+  XLSX.utils.book_append_sheet(workbook, buildAnnualSheet(scenario, outputs), 'Annual Summary');
   XLSX.utils.book_append_sheet(workbook, buildSourcesUsesSheet(outputs), 'Sources & Uses');
 
   const fileName = `H2MB_Finance_Model_${scenario.name.replace(/\s+/g, '_')}.xlsx`;

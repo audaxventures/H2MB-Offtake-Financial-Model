@@ -1,52 +1,108 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import { createDefaultScenario, DEFAULT_PRODUCTION } from '@/engine/defaults';
+import { createDefaultScenario } from '@/engine/defaults';
+import { generatePeriods } from '@/engine/calculations';
+import { migrateScenario } from '@/engine/migration';
 import { generateId } from '@/lib/id';
 import type {
   CapitalStructure,
   ConstructionCosts,
+  ExpenseLineItem,
   ITCSettings,
-  ProductionSettings,
-  QuarterInput,
+  ModelSettings,
+  PeriodRevenueInput,
+  PlantSettings,
+  RevenueStream,
   Scenario,
 } from '@/engine/types';
 
 export const MAX_SAVED_SCENARIOS = 5;
 export const MAX_COMPARE_SCENARIOS = 3;
 
-function cloneScenario(scenario: Scenario): Scenario {
+/** Deep-copies a scenario's nested objects/arrays, preserving its id/createdAt/name. */
+function deepCopyScenario(scenario: Scenario): Scenario {
   return {
     ...scenario,
-    id: generateId(),
-    createdAt: new Date(),
     capital: { ...scenario.capital },
     construction: { ...scenario.construction },
     itc: { ...scenario.itc },
-    production: { ...scenario.production },
-    quarters: scenario.quarters.map((q) => ({ ...q })),
+    plant: { ...scenario.plant },
+    modelSettings: { ...scenario.modelSettings },
+    revenueStreams: scenario.revenueStreams.map((s) => ({
+      ...s,
+      periods: s.periods.map((p) => ({ ...p })),
+    })),
+    expenseLineItems: scenario.expenseLineItems.map((item) => ({
+      ...item,
+      escalation: { ...item.escalation },
+      yearOverrides: { ...item.yearOverrides },
+    })),
   };
 }
 
-/**
- * Backfills fields added in later releases (e.g. offtakeMode,
- * maxDailyCapacityKg, dailyQuantityKg) onto scenarios that were persisted to
- * localStorage before those fields existed, so older saved data keeps
- * working instead of producing NaNs or getting silently discarded.
- */
-function migrateScenario(scenario: Scenario): Scenario {
-  const production: ProductionSettings = {
-    ...DEFAULT_PRODUCTION,
-    ...scenario.production,
-  };
+/** Deep-copies a scenario as a distinct new entity (fresh id/createdAt), for duplication. */
+function cloneScenario(scenario: Scenario): Scenario {
   return {
-    ...scenario,
-    createdAt: new Date(scenario.createdAt),
-    production,
-    quarters: scenario.quarters.map((q) => ({
-      ...q,
-      dailyQuantityKg: q.dailyQuantityKg ?? q.trucksPerDay * production.kgPerTruckFill,
-    })),
+    ...deepCopyScenario(scenario),
+    id: generateId(),
+    createdAt: new Date(),
+  };
+}
+
+const NEW_PERIOD_DEFAULTS: Omit<PeriodRevenueInput, 'year' | 'quarter'> = {
+  trucksPerDay: 5,
+  dailyQuantityKg: 400,
+  operatingDays: 80,
+  pricePerKg: 12,
+};
+
+/**
+ * Rebuilds a revenue stream's periods to match a (possibly changed) model
+ * timeline: existing (year, quarter) entries are kept as-is, entries no
+ * longer on the timeline are dropped, and newly-added years/quarters are
+ * filled in by carrying the last known values forward (falling back to
+ * sensible defaults if the stream had no periods at all).
+ */
+function reconcileStreamPeriods(stream: RevenueStream, modelSettings: ModelSettings): RevenueStream {
+  const timeline = generatePeriods(modelSettings);
+  const existingByKey = new Map(stream.periods.map((p) => [`${p.year}-${p.quarter}`, p]));
+  let lastKnown: Omit<PeriodRevenueInput, 'year' | 'quarter'> =
+    stream.periods[stream.periods.length - 1] ?? NEW_PERIOD_DEFAULTS;
+
+  const periods = timeline.map((p) => {
+    const existing = existingByKey.get(`${p.year}-${p.quarter}`);
+    if (existing) {
+      lastKnown = existing;
+      return existing;
+    }
+    return { ...lastKnown, year: p.year, quarter: p.quarter };
+  });
+
+  return { ...stream, periods };
+}
+
+function createBlankRevenueStream(modelSettings: ModelSettings, index: number): RevenueStream {
+  return {
+    id: generateId(),
+    name: `Revenue Stream ${index}`,
+    offtakeMode: 'trucks',
+    kgPerTruckFill: 80,
+    h2ProductionCostPerKg: 2.41,
+    startYear: 2,
+    periods: generatePeriods(modelSettings).map((p) => ({ ...NEW_PERIOD_DEFAULTS, year: p.year, quarter: p.quarter })),
+  };
+}
+
+function createBlankExpenseLineItem(): ExpenseLineItem {
+  return {
+    id: generateId(),
+    name: 'New Expense',
+    category: 'other',
+    startYear: 2,
+    baseAnnualAmount: 0,
+    escalation: { type: 'flat' },
+    yearOverrides: {},
   };
 }
 
@@ -59,13 +115,30 @@ interface ScenarioStoreState {
   updateCapital: (patch: Partial<CapitalStructure>) => void;
   updateConstruction: (patch: Partial<ConstructionCosts>) => void;
   updateITC: (patch: Partial<ITCSettings>) => void;
-  updateProduction: (patch: Partial<ProductionSettings>) => void;
-  updateQuarter: (
-    year: number,
-    quarter: number,
-    patch: Partial<QuarterInput>,
+  updatePlant: (patch: Partial<PlantSettings>) => void;
+  updateModelSettings: (patch: Partial<ModelSettings>) => void;
+
+  addRevenueStream: () => void;
+  removeRevenueStream: (streamId: string) => void;
+  updateRevenueStream: (
+    streamId: string,
+    patch: Partial<Omit<RevenueStream, 'id' | 'periods'>>,
   ) => void;
-  setYearAnnualExpenses: (year: number, annualExpenses: number) => void;
+  updateStreamPeriod: (
+    streamId: string,
+    year: number,
+    quarter: number | null,
+    patch: Partial<PeriodRevenueInput>,
+  ) => void;
+
+  addExpenseLineItem: () => void;
+  removeExpenseLineItem: (itemId: string) => void;
+  updateExpenseLineItem: (
+    itemId: string,
+    patch: Partial<Omit<ExpenseLineItem, 'id' | 'yearOverrides'>>,
+  ) => void;
+  setLineItemYearOverride: (itemId: string, year: number, value: number | undefined) => void;
+
   setCurrentName: (name: string) => void;
   replaceCurrent: (scenario: Scenario) => void;
   resetCurrent: () => void;
@@ -109,36 +182,113 @@ export const useScenarioStore = create<ScenarioStoreState>()(
           current: { ...state.current, itc: { ...state.current.itc, ...patch } },
         })),
 
-      updateProduction: (patch) =>
+      updatePlant: (patch) =>
+        set((state) => ({
+          current: { ...state.current, plant: { ...state.current.plant, ...patch } },
+        })),
+
+      updateModelSettings: (patch) =>
+        set((state) => {
+          const modelSettings = { ...state.current.modelSettings, ...patch };
+          const revenueStreams = state.current.revenueStreams.map((s) =>
+            reconcileStreamPeriods(s, modelSettings),
+          );
+          return { current: { ...state.current, modelSettings, revenueStreams } };
+        }),
+
+      addRevenueStream: () =>
         set((state) => ({
           current: {
             ...state.current,
-            production: { ...state.current.production, ...patch },
+            revenueStreams: [
+              ...state.current.revenueStreams,
+              createBlankRevenueStream(
+                state.current.modelSettings,
+                state.current.revenueStreams.length + 1,
+              ),
+            ],
           },
         })),
 
-      updateQuarter: (year, quarter, patch) =>
+      removeRevenueStream: (streamId) =>
         set((state) => ({
           current: {
             ...state.current,
-            quarters: state.current.quarters.map((q) =>
-              q.year === year && q.quarter === quarter ? { ...q, ...patch } : q,
+            revenueStreams: state.current.revenueStreams.filter((s) => s.id !== streamId),
+          },
+        })),
+
+      updateRevenueStream: (streamId, patch) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            revenueStreams: state.current.revenueStreams.map((s) =>
+              s.id === streamId ? { ...s, ...patch } : s,
             ),
           },
         })),
 
-      setYearAnnualExpenses: (year, annualExpenses) =>
+      updateStreamPeriod: (streamId, year, quarter, patch) =>
         set((state) => ({
           current: {
             ...state.current,
-            quarters: state.current.quarters.map((q) =>
-              q.year === year ? { ...q, annualExpenses } : q,
+            revenueStreams: state.current.revenueStreams.map((s) =>
+              s.id !== streamId
+                ? s
+                : {
+                    ...s,
+                    periods: s.periods.map((p) =>
+                      p.year === year && p.quarter === quarter ? { ...p, ...patch } : p,
+                    ),
+                  },
             ),
           },
         })),
 
-      setCurrentName: (name) =>
-        set((state) => ({ current: { ...state.current, name } })),
+      addExpenseLineItem: () =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            expenseLineItems: [...state.current.expenseLineItems, createBlankExpenseLineItem()],
+          },
+        })),
+
+      removeExpenseLineItem: (itemId) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            expenseLineItems: state.current.expenseLineItems.filter((i) => i.id !== itemId),
+          },
+        })),
+
+      updateExpenseLineItem: (itemId, patch) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            expenseLineItems: state.current.expenseLineItems.map((i) =>
+              i.id === itemId ? { ...i, ...patch } : i,
+            ),
+          },
+        })),
+
+      setLineItemYearOverride: (itemId, year, value) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            expenseLineItems: state.current.expenseLineItems.map((i) => {
+              if (i.id !== itemId) return i;
+              const yearOverrides = { ...i.yearOverrides };
+              if (value === undefined) {
+                delete yearOverrides[year];
+              } else {
+                yearOverrides[year] = value;
+              }
+              return { ...i, yearOverrides };
+            }),
+          },
+        })),
+
+      setCurrentName: (name) => set((state) => ({ current: { ...state.current, name } })),
 
       replaceCurrent: (scenario) => set({ current: scenario }),
 
@@ -179,16 +329,7 @@ export const useScenarioStore = create<ScenarioStoreState>()(
       loadScenario: (id) => {
         const scenario = get().savedScenarios.find((s) => s.id === id);
         if (!scenario) return;
-        set({
-          current: {
-            ...scenario,
-            capital: { ...scenario.capital },
-            construction: { ...scenario.construction },
-            itc: { ...scenario.itc },
-            production: { ...scenario.production },
-            quarters: scenario.quarters.map((q) => ({ ...q })),
-          },
-        });
+        set({ current: deepCopyScenario(scenario) });
       },
 
       duplicateScenario: (id) => {
@@ -209,9 +350,7 @@ export const useScenarioStore = create<ScenarioStoreState>()(
 
       renameScenario: (id, name) =>
         set((state) => ({
-          savedScenarios: state.savedScenarios.map((s) =>
-            s.id === id ? { ...s, name } : s,
-          ),
+          savedScenarios: state.savedScenarios.map((s) => (s.id === id ? { ...s, name } : s)),
         })),
 
       toggleCompare: (id) =>

@@ -2,12 +2,13 @@ import {
   BarChart3,
   Factory,
   LayoutDashboard,
-  Table2,
+  Receipt,
+  TrendingUp,
   Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ViewId = 'assumptions' | 'quarterly' | 'annual' | 'sources';
+export type ViewId = 'assumptions' | 'revenue' | 'expenses' | 'annual' | 'sources';
 
 interface NavItem {
   id: ViewId;
@@ -17,7 +18,8 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'assumptions', label: 'Assumptions Dashboard', icon: LayoutDashboard },
-  { id: 'quarterly', label: 'Quarterly Model', icon: Table2 },
+  { id: 'revenue', label: 'Revenue Streams', icon: TrendingUp },
+  { id: 'expenses', label: 'Expense Items', icon: Receipt },
   { id: 'annual', label: 'Annual Summary', icon: BarChart3 },
   { id: 'sources', label: 'Sources & Uses / ITC', icon: Zap },
 ];

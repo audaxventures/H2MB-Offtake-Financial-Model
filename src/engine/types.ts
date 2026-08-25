@@ -26,6 +26,22 @@ export interface ITCSettings {
   appliedTo: ITCApplication;
 }
 
+/** Shared, plant-level (not per-stream) physical constraints. */
+export interface PlantSettings {
+  maxDailyCapacityKg: number;
+}
+
+/**
+ * Model horizon. The first `quarterlyYears` years are modeled at quarterly
+ * granularity (matching the original construction + ramp detail); the
+ * remaining years through `totalYears` are modeled as single annual
+ * periods. Internally both are "periods" — see ModelPeriod.
+ */
+export interface ModelSettings {
+  totalYears: number;
+  quarterlyYears: number;
+}
+
 /**
  * 'trucks': volume is derived from trucksPerDay × kgPerTruckFill (Class 8 FCET
  * offtake, the original H2MB use case).
@@ -34,24 +50,89 @@ export interface ITCSettings {
  */
 export type OfftakeMode = 'trucks' | 'direct';
 
-export interface QuarterInput {
+/** One quarter (years 1..quarterlyYears) or one full year (years quarterlyYears+1..totalYears) of a revenue stream's inputs. */
+export interface PeriodRevenueInput {
   year: number;
-  quarter: number;
+  quarter: number | null;
   trucksPerDay: number;
   dailyQuantityKg: number;
   operatingDays: number;
   pricePerKg: number;
-  annualExpenses: number;
 }
 
-export interface ProductionSettings {
+/**
+ * A single named offtake arrangement (e.g. "Truck Fleet — Carrier A",
+ * "Datacentre B Direct Supply"). A scenario can have multiple concurrent
+ * streams, each with its own offtake mode, production economics, start
+ * year, and per-period volume/price inputs; total revenue is the sum
+ * across all streams.
+ */
+export interface RevenueStream {
+  id: string;
+  name: string;
   offtakeMode: OfftakeMode;
   kgPerTruckFill: number;
-  maxDailyCapacityKg: number;
   h2ProductionCostPerKg: number;
-  expenseEscalationRate: number;
-  year5PlusPricePerKg: number;
-  year5PlusAnnualExpenses: number;
+  /** First year this stream can generate revenue (still gated by the global construction window). */
+  startYear: number;
+  periods: PeriodRevenueInput[];
+}
+
+export type ExpenseCategory =
+  | 'cogs'
+  | 'payroll'
+  | 'ga'
+  | 'salesMarketing'
+  | 'rd'
+  | 'insurance'
+  | 'maintenance'
+  | 'utilities'
+  | 'professionalFees'
+  | 'other';
+
+export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
+  cogs: 'Cost of Goods Sold (additional)',
+  payroll: 'Payroll & Benefits',
+  ga: 'General & Administrative',
+  salesMarketing: 'Sales & Marketing',
+  rd: 'Research & Development',
+  insurance: 'Insurance',
+  maintenance: 'Repairs & Maintenance',
+  utilities: 'Utilities',
+  professionalFees: 'Professional & Legal Fees',
+  other: 'Other Operating Expenses',
+};
+
+/**
+ * 'flat': the same annual amount every year from startYear on.
+ * 'percentGrowth': baseAnnualAmount compounding at growthRate per year.
+ * 'percentOfRevenue': percentOfRevenue × that year's total revenue (all streams).
+ * 'manual': the annual amount must be set per-year via yearOverrides; years
+ * without an explicit override are treated as $0 (useful for one-time or
+ * irregular items, e.g. a single capital overhaul in Year 8).
+ */
+export type EscalationType = 'flat' | 'percentGrowth' | 'percentOfRevenue' | 'manual';
+
+export interface EscalationConfig {
+  type: EscalationType;
+  growthRate?: number;
+  percentOfRevenue?: number;
+}
+
+/**
+ * A single line-item expense (e.g. "Salaries & Benefits", "Property
+ * Insurance"). The annual amount for any given year is resolved by
+ * `resolveLineItemAnnualAmount()` from baseAnnualAmount + escalation,
+ * with yearOverrides taking precedence when present.
+ */
+export interface ExpenseLineItem {
+  id: string;
+  name: string;
+  category: ExpenseCategory;
+  startYear: number;
+  baseAnnualAmount: number;
+  escalation: EscalationConfig;
+  yearOverrides: Record<number, number>;
 }
 
 export interface Scenario {
@@ -61,26 +142,42 @@ export interface Scenario {
   capital: CapitalStructure;
   construction: ConstructionCosts;
   itc: ITCSettings;
-  production: ProductionSettings;
-  quarters: QuarterInput[];
+  plant: PlantSettings;
+  modelSettings: ModelSettings;
+  revenueStreams: RevenueStream[];
+  expenseLineItems: ExpenseLineItem[];
 }
 
-export interface QuarterResult {
+/** A single quarter (years 1..quarterlyYears) or year (beyond) on the model timeline. */
+export interface ModelPeriod {
   index: number;
   year: number;
-  quarter: number;
+  quarter: number | null;
   label: string;
+  periodsPerYear: number;
+  periodFraction: number;
   isConstruction: boolean;
-  isITCQuarter: boolean;
-  trucksPerDay: number;
+}
+
+export interface StreamPeriodResult {
+  streamId: string;
+  streamName: string;
+  revenue: number;
+  cogs: number;
   dailyQuantityKg: number;
   operatingDays: number;
   pricePerKg: number;
+}
+
+export interface PeriodResult extends ModelPeriod {
+  isITCPeriod: boolean;
   revenue: number;
   cogs: number;
   grossProfit: number;
-  quarterlyExpenses: number;
-  annualExpensesBudget: number;
+  streamBreakdown: StreamPeriodResult[];
+  preRevenueOpex: number;
+  expensesByCategory: Partial<Record<ExpenseCategory, number>>;
+  totalOperatingExpenses: number;
   ebitda: number;
   openingDebtBalance: number;
   interest: number;
@@ -100,7 +197,9 @@ export interface AnnualResult {
   cogs: number;
   grossProfit: number;
   grossMarginPct: number | null;
-  companyExpenses: number;
+  preRevenueOpex: number;
+  expensesByCategory: Partial<Record<ExpenseCategory, number>>;
+  totalOperatingExpenses: number;
   ebitda: number;
   ebitdaMarginPct: number | null;
   depreciation: number;
@@ -140,11 +239,11 @@ export interface SourcesAndUses {
 }
 
 export interface ModelOutputs {
-  quarters: QuarterResult[];
+  periods: PeriodResult[];
   annual: AnnualResult[];
   sourcesAndUses: SourcesAndUses;
-  totalRevenue5yr: number;
-  totalNetCash5yr: number;
+  totalRevenueAllYears: number;
+  totalNetCashAllYears: number;
   equityIRR: number | null;
   equityPaybackYear: number | null;
   minDSCR: number | null;

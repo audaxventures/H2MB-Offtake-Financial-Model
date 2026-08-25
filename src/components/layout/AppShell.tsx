@@ -5,7 +5,8 @@ import { useScenarioStore } from '@/store/scenarioStore';
 
 const VIEW_TITLES: Record<ViewId, string> = {
   assumptions: 'Assumptions Dashboard',
-  quarterly: 'Quarterly Model',
+  revenue: 'Revenue Streams',
+  expenses: 'Expense Items',
   annual: 'Annual Summary',
   sources: 'Sources & Uses / ITC Analysis',
 };
