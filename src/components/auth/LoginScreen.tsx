@@ -1,5 +1,4 @@
 import { useState, type FormEvent } from 'react';
-import { Droplet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -37,10 +36,10 @@ export function LoginScreen() {
     <div className="bg-background flex min-h-svh w-full items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
-          <div className="bg-h2mb-navy mb-2 flex size-12 items-center justify-center rounded-full text-white">
-            <Droplet className="size-6" />
-          </div>
-          <CardTitle className="text-lg">H2MB Project Finance Model</CardTitle>
+          <img src="/logo.png" alt="H2MB Inc." className="mb-1 h-auto w-56" />
+          <CardTitle className="text-muted-foreground text-sm font-medium tracking-wide uppercase">
+            Project Finance Model
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <form className="grid gap-4" onSubmit={handleSubmit}>

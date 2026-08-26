@@ -1,6 +1,5 @@
 import {
   BarChart3,
-  Factory,
   LayoutDashboard,
   Receipt,
   TrendingUp,
@@ -32,16 +31,11 @@ interface SidebarProps {
 export function Sidebar({ active, onNavigate }: SidebarProps) {
   return (
     <aside className="bg-sidebar text-sidebar-foreground border-sidebar-border hidden w-64 shrink-0 flex-col border-r lg:flex">
-      <div className="flex items-center gap-2 px-5 py-5">
-        <div className="bg-h2mb-navy flex size-9 items-center justify-center rounded-lg text-white">
-          <Factory className="size-5" />
-        </div>
-        <div>
-          <p className="text-sm leading-tight font-semibold">H2MB Inc.</p>
-          <p className="text-muted-foreground text-xs leading-tight">
-            Project Finance Model
-          </p>
-        </div>
+      <div className="px-5 py-5">
+        <img src="/logo.png" alt="H2MB Inc." className="h-auto w-full" />
+        <p className="text-muted-foreground mt-1.5 text-xs leading-tight">
+          Project Finance Model
+        </p>
       </div>
 
       <nav className="flex flex-col gap-1 px-3">
