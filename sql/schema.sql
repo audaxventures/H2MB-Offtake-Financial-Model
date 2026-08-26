@@ -1,20 +1,15 @@
 -- H2MB Project Finance Model - Neon Postgres schema
--- Run this once in the Neon SQL Editor (or via scripts/create-user.mjs, which
--- creates these tables automatically before creating your login).
+--
+-- You don't need to run this by hand: api/state.ts creates this table
+-- automatically on first use. It's kept here for reference, and in case you
+-- ever want to inspect/reset it from the Neon SQL Editor.
 
-create table if not exists users (
-  id uuid primary key default gen_random_uuid(),
-  email text unique not null,
-  password_hash text not null,
-  created_at timestamptz not null default now()
-);
-
--- One JSON blob per user holding the entire app state (current scenario,
--- saved scenarios, comparison selection, dark mode). Simple and sufficient
--- for a single-account, multi-device tool: every save pushes the whole
--- blob, every login/device pulls the latest one.
+-- One JSON blob holding the entire app state (current scenario, saved
+-- scenarios, comparison selection, dark mode). There's only ever one row —
+-- this is a single-account tool, login is just AUTH_EMAIL/AUTH_PASSWORD.
 create table if not exists app_state (
-  user_id uuid primary key references users(id) on delete cascade,
+  id smallint primary key default 1,
   data jsonb not null,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint app_state_singleton check (id = 1)
 );

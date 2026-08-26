@@ -1,46 +1,46 @@
-import { SignJWT, jwtVerify } from 'jose';
+import { timingSafeEqual } from 'node:crypto';
 import type { VercelRequest } from '@vercel/node';
-
-const TOKEN_TTL = '30d';
 
 export class AuthError extends Error {}
 
-function getSecret(): Uint8Array {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    throw new Error('JWT_SECRET is not set');
+/** Constant-time string comparison so a wrong guess can't be timed to leak how much of it was correct. */
+function safeEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
+
+function getExpectedCredentials(): { email: string; password: string } {
+  const email = process.env.AUTH_EMAIL;
+  const password = process.env.AUTH_PASSWORD;
+  if (!email || !password) {
+    throw new Error('AUTH_EMAIL/AUTH_PASSWORD are not set');
   }
-  return new TextEncoder().encode(secret);
+  return { email: email.toLowerCase().trim(), password };
 }
 
-export interface TokenPayload {
-  sub: string;
-  email: string;
+/** Checks a login attempt against the AUTH_EMAIL/AUTH_PASSWORD env vars. */
+export function checkCredentials(email: string, password: string): boolean {
+  const expected = getExpectedCredentials();
+  const emailOk = safeEqual(email.toLowerCase().trim(), expected.email);
+  const passwordOk = safeEqual(password, expected.password);
+  return emailOk && passwordOk;
 }
 
-export async function signToken(payload: TokenPayload): Promise<string> {
-  return new SignJWT({ email: payload.email })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setSubject(payload.sub)
-    .setIssuedAt()
-    .setExpirationTime(TOKEN_TTL)
-    .sign(getSecret());
-}
-
-export async function requireUser(req: VercelRequest): Promise<TokenPayload> {
+/**
+ * Verifies the bearer token on a protected request. The token is just the
+ * account password (issued back to the client at login) — there's only one
+ * account, so there's nothing else for it to encode.
+ */
+export function requireToken(req: VercelRequest): void {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     throw new AuthError('Missing bearer token');
   }
   const token = header.slice('Bearer '.length);
-  try {
-    const { payload } = await jwtVerify(token, getSecret());
-    if (typeof payload.sub !== 'string' || typeof payload.email !== 'string') {
-      throw new AuthError('Malformed token');
-    }
-    return { sub: payload.sub, email: payload.email };
-  } catch (err) {
-    if (err instanceof AuthError) throw err;
-    throw new AuthError('Invalid or expired token');
+  const expected = getExpectedCredentials();
+  if (!safeEqual(token, expected.password)) {
+    throw new AuthError('Invalid token');
   }
 }

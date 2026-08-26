@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getSql } from './_lib/db';
-import { requireUser, AuthError } from './_lib/auth';
+import { getSql, ensureAppStateTable } from './_lib/db';
+import { requireToken, AuthError } from './_lib/auth';
 
 interface StateRow {
   data: unknown;
@@ -8,16 +8,15 @@ interface StateRow {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  let user;
   try {
-    user = await requireUser(req);
+    requireToken(req);
   } catch (err) {
     if (err instanceof AuthError) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
     console.error('Auth error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Server is not configured: set AUTH_EMAIL and AUTH_PASSWORD' });
     return;
   }
 
@@ -25,9 +24,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') {
     try {
-      const rows = (await sql`
-        select data, updated_at from app_state where user_id = ${user.sub} limit 1
-      `) as StateRow[];
+      await ensureAppStateTable(sql);
+      const rows = (await sql`select data, updated_at from app_state where id = 1 limit 1`) as StateRow[];
       const row = rows[0];
       res.status(200).json({ data: row?.data ?? null, updatedAt: row?.updated_at ?? null });
     } catch (err) {
@@ -44,10 +42,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
     try {
+      await ensureAppStateTable(sql);
       await sql`
-        insert into app_state (user_id, data, updated_at)
-        values (${user.sub}, ${JSON.stringify(data)}::jsonb, now())
-        on conflict (user_id) do update set data = excluded.data, updated_at = now()
+        insert into app_state (id, data, updated_at)
+        values (1, ${JSON.stringify(data)}::jsonb, now())
+        on conflict (id) do update set data = excluded.data, updated_at = now()
       `;
       res.status(200).json({ ok: true });
     } catch (err) {

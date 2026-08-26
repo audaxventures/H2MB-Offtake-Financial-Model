@@ -1,13 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import bcrypt from 'bcryptjs';
-import { getSql } from '../_lib/db';
-import { signToken } from '../_lib/auth';
-
-interface UserRow {
-  id: string;
-  email: string;
-  password_hash: string;
-}
+import { checkCredentials } from '../_lib/auth';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
@@ -22,26 +14,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const sql = getSql();
-    const rows = (await sql`
-      select id, email, password_hash from users where email = ${email.toLowerCase().trim()} limit 1
-    `) as UserRow[];
-    const user = rows[0];
-
-    // Compare against a dummy hash when the user doesn't exist, so the
-    // response time doesn't reveal whether the email is registered.
-    const hashToCheck = user?.password_hash ?? '$2a$12$C6UzMDM.H6dfI/f/IKcEeOx8/Rk3JTQqA5J8v6bqQ1lHc.p5t6H0e';
-    const valid = await bcrypt.compare(password, hashToCheck);
-
-    if (!user || !valid) {
+    if (!checkCredentials(email, password)) {
       res.status(401).json({ error: 'Invalid email or password' });
       return;
     }
-
-    const token = await signToken({ sub: user.id, email: user.email });
-    res.status(200).json({ token, email: user.email });
+    // The password itself doubles as the bearer token for later requests —
+    // there's only one account, so there's nothing else worth encoding.
+    res.status(200).json({ token: password, email: email.toLowerCase().trim() });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Server is not configured: set AUTH_EMAIL and AUTH_PASSWORD' });
   }
 }
