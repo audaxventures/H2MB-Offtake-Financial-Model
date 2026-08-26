@@ -1,6 +1,6 @@
 import XLSX from 'xlsx-js-style';
-import { DSCR_DANGER, DSCR_TARGET } from '@/engine/calculations';
-import { EXPENSE_CATEGORY_LABELS } from '@/engine/types';
+import { DSCR_DANGER, DSCR_TARGET, computeCapexByCategory } from '@/engine/calculations';
+import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
 import type { ExpenseCategory, ModelOutputs, Scenario } from '@/engine/types';
 
 const NAVY = '1F4E79';
@@ -84,14 +84,30 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   line('Grace Period (years)', scenario.capital.gracePeriod, '0');
   rows.push([]);
 
+  const capexByCategory = computeCapexByCategory(scenario);
   section('Construction Costs');
-  line('Hard CapEx', scenario.construction.hardCapex);
-  line('Soft Costs', scenario.construction.softCosts);
-  line('Contingency', scenario.construction.contingency);
+  line('Hard CapEx', capexByCategory.hardCapex ?? 0);
+  line('Soft Costs', capexByCategory.softCosts ?? 0);
+  line('Contingency', capexByCategory.contingency ?? 0);
+  if (capexByCategory.other) line('Other Capital Costs', capexByCategory.other);
   line('Construction OpEx / Month', scenario.construction.constructionOpexPerMonth);
   line('Construction Duration (months)', scenario.construction.constructionDurationMonths, '0');
   line('Debt Service Reserve (months)', scenario.construction.debtServiceReserveMonths, '0');
   line('Working Capital Buffer', scenario.construction.workingCapitalBuffer);
+  rows.push([]);
+
+  section('CapEx Line Items');
+  for (const item of scenario.capexLineItems) {
+    const escalationDesc =
+      item.escalation.type === 'percentGrowth'
+        ? `${((item.escalation.growthRate ?? 0) * 100).toFixed(2)}%/yr growth`
+        : item.escalation.type === 'percentOfRevenue'
+          ? `${((item.escalation.percentOfRevenue ?? 0) * 100).toFixed(2)}% of revenue`
+          : item.escalation.type === 'manual'
+            ? 'Manual per-year'
+            : 'Flat';
+    rows.push([cell(item.name, boldStyle), cell(`${CAPEX_CATEGORY_LABELS[item.category]} · ${escalationDesc}`)]);
+  }
   rows.push([]);
 
   section('ITC Settings');
@@ -205,11 +221,24 @@ function buildAnnualSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkS
       scenario.expenseLineItems.filter((i) => i.category !== 'cogs').map((i) => i.category),
     ),
   );
+  const usedCapexCategories = Array.from(new Set(scenario.capexLineItems.map((i) => i.category)));
 
   line('Hydrogen Sales Revenue', outputs.annual.map((a) => a.revenue));
   line('Cost of Goods Sold', outputs.annual.map((a) => -a.cogs));
   line('Gross Profit', outputs.annual.map((a) => a.grossProfit), CURRENCY_FMT, boldStyle);
   line('Gross Margin %', outputs.annual.map((a) => a.grossMarginPct), PERCENT_FMT);
+
+  for (const category of usedCapexCategories) {
+    line(
+      CAPEX_CATEGORY_LABELS[category],
+      outputs.annual.map((a) => -(a.capexByCategory[category] ?? 0)),
+    );
+  }
+  if (usedCapexCategories.length > 0) {
+    line('Total CapEx Spend', outputs.annual.map((a) => -a.capexSpend), CURRENCY_FMT, boldStyle);
+    line('Cumulative CapEx Spent', outputs.annual.map((a) => -a.cumulativeCapexSpend));
+  }
+
   line('Pre-Revenue / Construction OpEx', outputs.annual.map((a) => -a.preRevenueOpex));
   for (const category of usedCategories as ExpenseCategory[]) {
     line(
@@ -261,6 +290,9 @@ function buildSourcesUsesSheet(outputs: ModelOutputs): XLSX.WorkSheet {
   rows.push([cell('Hard CapEx'), cell(su.uses.hardCapex, undefined, CURRENCY_FMT)]);
   rows.push([cell('Soft Costs'), cell(su.uses.softCosts, undefined, CURRENCY_FMT)]);
   rows.push([cell('Contingency'), cell(su.uses.contingency, undefined, CURRENCY_FMT)]);
+  if (su.uses.otherCapex) {
+    rows.push([cell('Other Capital Costs'), cell(su.uses.otherCapex, undefined, CURRENCY_FMT)]);
+  }
   rows.push([cell('Pre-Revenue OpEx'), cell(su.uses.preRevenueOpex, undefined, CURRENCY_FMT)]);
   rows.push([cell('Debt Service Reserve'), cell(su.uses.debtServiceReserve, undefined, CURRENCY_FMT)]);
   rows.push([cell('Working Capital Buffer'), cell(su.uses.workingCapitalBuffer, undefined, CURRENCY_FMT)]);

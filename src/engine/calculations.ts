@@ -1,8 +1,9 @@
 import type {
   AnnualResult,
+  CapexCategory,
+  EscalatedLineItem,
   EscalationConfig,
   ExpenseCategory,
-  ExpenseLineItem,
   ModelOutputs,
   ModelPeriod,
   ModelSettings,
@@ -153,10 +154,12 @@ function computeStreamPeriodResult(
  * Resolves the ANNUAL dollar amount for a line item in a given year.
  * yearOverrides always take precedence; otherwise the escalation config
  * is applied against baseAnnualAmount (or, for 'percentOfRevenue', against
- * that year's total revenue across all streams).
+ * that year's total revenue across all streams). Works for both operating
+ * expense line items and CapEx line items, since both share the
+ * EscalatedLineItem shape.
  */
 export function resolveLineItemAnnualAmount(
-  item: ExpenseLineItem,
+  item: EscalatedLineItem,
   year: number,
   totalRevenueForYear: number,
 ): number {
@@ -196,6 +199,40 @@ export function findITCPeriodIndex(periods: ModelPeriod[], receivedInYear: numbe
 }
 
 /**
+ * Total revenue per year (all streams), needed up-front for
+ * 'percentOfRevenue' expense/CapEx line items.
+ */
+export function computeRevenueByYear(scenario: Scenario): Map<number, number> {
+  const periods = buildPeriods(scenario);
+  const revenueByYear = new Map<number, number>();
+  for (const period of periods) {
+    const periodRevenue = sum(
+      scenario.revenueStreams.map((s) => computeStreamPeriodResult(s, period).revenue),
+    );
+    revenueByYear.set(period.year, (revenueByYear.get(period.year) ?? 0) + periodRevenue);
+  }
+  return revenueByYear;
+}
+
+/** Total CapEx booked in each category (summed across all years) — used for Sources & Uses and the depreciation base. */
+export function computeCapexByCategory(scenario: Scenario): Partial<Record<CapexCategory, number>> {
+  const revenueByYear = computeRevenueByYear(scenario);
+  const totals: Partial<Record<CapexCategory, number>> = {};
+  for (const item of scenario.capexLineItems) {
+    for (let year = 1; year <= scenario.modelSettings.totalYears; year++) {
+      const amount = resolveLineItemAnnualAmount(item, year, revenueByYear.get(year) ?? 0);
+      if (amount === 0) continue;
+      totals[item.category] = (totals[item.category] ?? 0) + amount;
+    }
+  }
+  return totals;
+}
+
+export function computeTotalCapex(scenario: Scenario): number {
+  return sum(Object.values(computeCapexByCategory(scenario)));
+}
+
+/**
  * Runs the full period-by-period cash flow / debt schedule across the
  * scenario's whole model horizon (quarterly through quarterlyYears, then
  * annual through totalYears).
@@ -205,7 +242,7 @@ export function computeModelPeriods(
   scenario: Scenario,
   itcOverrideAmount?: number,
 ): PeriodResult[] {
-  const { capital, construction, itc, revenueStreams, expenseLineItems } = scenario;
+  const { capital, construction, itc, revenueStreams, expenseLineItems, capexLineItems } = scenario;
   const periods = buildPeriods(scenario);
   const itcAmount = itcOverrideAmount ?? itc.amount;
   const itcPeriodIndex = findITCPeriodIndex(periods, itc.receivedInYear);
@@ -214,15 +251,7 @@ export function computeModelPeriods(
   const annualScheduledPrincipal = amortYears > 0 ? capital.totalDebt / amortYears : 0;
   const principalStartYear = capital.gracePeriod + 2;
 
-  // Total revenue per year (all streams) is needed up-front for
-  // 'percentOfRevenue' expense line items.
-  const revenueByYear = new Map<number, number>();
-  for (const period of periods) {
-    const periodRevenue = sum(
-      revenueStreams.map((s) => computeStreamPeriodResult(s, period).revenue),
-    );
-    revenueByYear.set(period.year, (revenueByYear.get(period.year) ?? 0) + periodRevenue);
-  }
+  const revenueByYear = computeRevenueByYear(scenario);
 
   let openingDebtBalance = capital.totalDebt;
   let cumulativeCF = 0;
@@ -264,6 +293,22 @@ export function computeModelPeriods(
     );
     const ebitda = grossProfit - totalOperatingExpenses - preRevenueOpex;
 
+    // CapEx is capitalized, not expensed — it funds Sources & Uses and the
+    // depreciation base (see computeAnnualSummary), not EBITDA. Tracked here
+    // purely so the timing of capital spend can be shown to the user.
+    const capexByCategory: Partial<Record<CapexCategory, number>> = {};
+    let capexSpend = 0;
+    {
+      const annualRevenueForYear = revenueByYear.get(period.year) ?? 0;
+      for (const item of capexLineItems) {
+        const annualAmount = resolveLineItemAnnualAmount(item, period.year, annualRevenueForYear);
+        if (annualAmount === 0) continue;
+        const periodAmount = annualAmount * period.periodFraction;
+        capexByCategory[item.category] = (capexByCategory[item.category] ?? 0) + periodAmount;
+        capexSpend += periodAmount;
+      }
+    }
+
     const interest = openingDebtBalance * capital.interestRate * period.periodFraction;
     let principal =
       period.year >= principalStartYear ? annualScheduledPrincipal * period.periodFraction : 0;
@@ -294,6 +339,8 @@ export function computeModelPeriods(
       preRevenueOpex,
       expensesByCategory,
       totalOperatingExpenses,
+      capexSpend,
+      capexByCategory,
       ebitda,
       openingDebtBalance,
       interest,
@@ -315,16 +362,15 @@ export function computeAnnualSummary(
   scenario: Scenario,
   periods: PeriodResult[],
 ): AnnualResult[] {
-  const totalCapex =
-    scenario.construction.hardCapex +
-    scenario.construction.softCosts +
-    scenario.construction.contingency;
+  const totalCapex = computeTotalCapex(scenario);
   const annualDepreciation =
     (totalCapex * (1 - DEPRECIATION_SALVAGE_PCT)) / DEPRECIATION_LIFE_YEARS;
   const firstOpYear = firstOperatingYear(periods);
 
   const years: number[] = [];
   for (let y = 1; y <= scenario.modelSettings.totalYears; y++) years.push(y);
+
+  let cumulativeCapexSpend = 0;
 
   return years.map((year) => {
     const yearPeriods = periods.filter((p) => p.year === year);
@@ -346,6 +392,16 @@ export function computeAnnualSummary(
     }
     const totalOperatingExpenses = sum(yearPeriods.map((p) => p.totalOperatingExpenses));
     const preRevenueOpex = sum(yearPeriods.map((p) => p.preRevenueOpex));
+
+    const capexByCategory: Partial<Record<CapexCategory, number>> = {};
+    for (const p of yearPeriods) {
+      for (const [category, amount] of Object.entries(p.capexByCategory)) {
+        const key = category as CapexCategory;
+        capexByCategory[key] = (capexByCategory[key] ?? 0) + (amount ?? 0);
+      }
+    }
+    const capexSpend = sum(yearPeriods.map((p) => p.capexSpend));
+    cumulativeCapexSpend += capexSpend;
 
     const totalDebtService = interest + principal + extraPrincipalFromITC;
     const depreciation = year >= firstOpYear ? annualDepreciation : 0;
@@ -374,6 +430,9 @@ export function computeAnnualSummary(
       preRevenueOpex,
       expensesByCategory,
       totalOperatingExpenses,
+      capexSpend,
+      capexByCategory,
+      cumulativeCapexSpend,
       ebitda,
       ebitdaMarginPct: revenue > 0 ? ebitda / revenue : null,
       depreciation,
@@ -509,11 +568,13 @@ export function computeSourcesAndUses(scenario: Scenario): SourcesAndUses {
   const preRevenueOpex =
     construction.constructionOpexPerMonth * construction.constructionDurationMonths;
   const debtServiceReserve = calculateDSRAmount(scenario);
+  const capexByCategory = computeCapexByCategory(scenario);
 
   const uses = {
-    hardCapex: construction.hardCapex,
-    softCosts: construction.softCosts,
-    contingency: construction.contingency,
+    hardCapex: capexByCategory.hardCapex ?? 0,
+    softCosts: capexByCategory.softCosts ?? 0,
+    contingency: capexByCategory.contingency ?? 0,
+    otherCapex: capexByCategory.other ?? 0,
     preRevenueOpex,
     debtServiceReserve,
     workingCapitalBuffer: construction.workingCapitalBuffer,
@@ -523,6 +584,7 @@ export function computeSourcesAndUses(scenario: Scenario): SourcesAndUses {
     uses.hardCapex +
     uses.softCosts +
     uses.contingency +
+    uses.otherCapex +
     uses.preRevenueOpex +
     uses.debtServiceReserve +
     uses.workingCapitalBuffer;

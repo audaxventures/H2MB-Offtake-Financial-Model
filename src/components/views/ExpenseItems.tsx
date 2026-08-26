@@ -11,12 +11,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SliderInput } from '@/components/shared/SliderInput';
 import { DataTable, type DataTableColumn } from '@/components/shared/DataTable';
 import { resolveLineItemAnnualAmount } from '@/engine/calculations';
 import { formatCurrency, formatPercent } from '@/engine/formatters';
-import { EXPENSE_CATEGORY_LABELS } from '@/engine/types';
-import type { EscalationType, ExpenseCategory, ExpenseLineItem } from '@/engine/types';
+import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
+import type {
+  CapexCategory,
+  CapexLineItem,
+  EscalationType,
+  ExpenseCategory,
+  ExpenseLineItem,
+} from '@/engine/types';
 import { useScenarioStore } from '@/store/scenarioStore';
 import { useModelOutputs } from '@/store/useModelOutputs';
 
@@ -28,6 +35,23 @@ const ESCALATION_LABELS: Record<EscalationType, string> = {
 };
 
 export function ExpenseItems() {
+  return (
+    <Tabs defaultValue="opex" className="gap-6">
+      <TabsList>
+        <TabsTrigger value="opex">Operating Expenses</TabsTrigger>
+        <TabsTrigger value="capex">Construction / CapEx</TabsTrigger>
+      </TabsList>
+      <TabsContent value="opex">
+        <OperatingExpensesTab />
+      </TabsContent>
+      <TabsContent value="capex">
+        <CapexTab />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function OperatingExpensesTab() {
   const current = useScenarioStore((s) => s.current);
   const addExpenseLineItem = useScenarioStore((s) => s.addExpenseLineItem);
   const removeExpenseLineItem = useScenarioStore((s) => s.removeExpenseLineItem);
@@ -270,7 +294,269 @@ export function ExpenseItems() {
             items={current.expenseLineItems}
             years={years}
             revenueByYear={revenueByYear}
-            totalOpexByYear={totalOpexByYear}
+            totalByYear={totalOpexByYear}
+            totalLabel="Total Operating Expenses"
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function CapexTab() {
+  const current = useScenarioStore((s) => s.current);
+  const addCapexLineItem = useScenarioStore((s) => s.addCapexLineItem);
+  const removeCapexLineItem = useScenarioStore((s) => s.removeCapexLineItem);
+  const updateCapexLineItem = useScenarioStore((s) => s.updateCapexLineItem);
+  const setCapexLineItemYearOverride = useScenarioStore((s) => s.setCapexLineItemYearOverride);
+  const outputs = useModelOutputs();
+
+  const [selectedItemId, setSelectedItemId] = useState<string | undefined>(
+    current.capexLineItems[0]?.id,
+  );
+  const item =
+    current.capexLineItems.find((i) => i.id === selectedItemId) ?? current.capexLineItems[0];
+
+  const revenueByYear = new Map(outputs.annual.map((a) => [a.year, a.revenue]));
+  const years = Array.from({ length: current.modelSettings.totalYears }, (_, i) => i + 1);
+
+  const totalCapexByYear = outputs.annual.map((a) => a.capexSpend);
+  const totalCapex = totalCapexByYear.reduce((acc, v) => acc + v, 0);
+
+  return (
+    <div className="grid gap-6">
+      <p className="text-muted-foreground -mt-2 text-sm">
+        Detailed capital cost items — equipment, engineering, contingency, etc. Unlike operating
+        expenses these don't hit EBITDA; they fund Sources &amp; Uses and depreciation. Enter the
+        dollar amount actually spent in each year (e.g. most of a plant purchase in Year 1, the
+        remainder in Year 2) using the per-year table below.
+      </p>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1.3fr]">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>CapEx Line Items</CardTitle>
+            <Button size="sm" variant="outline" onClick={addCapexLineItem}>
+              <Plus />
+              Add Item
+            </Button>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            {current.capexLineItems.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                No CapEx line items yet. Add one to start detailing construction costs.
+              </p>
+            )}
+            {current.capexLineItems.map((i) => (
+              <button
+                key={i.id}
+                type="button"
+                onClick={() => setSelectedItemId(i.id)}
+                className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                  i.id === item?.id
+                    ? 'border-primary bg-accent'
+                    : 'hover:bg-accent/50 border-transparent'
+                }`}
+              >
+                <div>
+                  <p className="font-medium">{i.name || 'Untitled CapEx Item'}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {CAPEX_CATEGORY_LABELS[i.category]} · {ESCALATION_LABELS[i.escalation.type]}
+                  </p>
+                </div>
+                <span className="text-muted-foreground tabular-nums">
+                  {formatCurrency(
+                    years.reduce(
+                      (acc, y) => acc + resolveLineItemAnnualAmount(i, y, revenueByYear.get(y) ?? 0),
+                      0,
+                    ),
+                  )}
+                  {' total'}
+                </span>
+              </button>
+            ))}
+            {current.capexLineItems.length > 0 && (
+              <div className="mt-1 flex items-center justify-between border-t pt-2 text-sm font-semibold">
+                <span>Total CapEx</span>
+                <span className="tabular-nums">{formatCurrency(totalCapex)}</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>{item ? 'Edit CapEx Item' : 'No Item Selected'}</CardTitle>
+            {item && (
+              <Button size="sm" variant="outline" onClick={() => removeCapexLineItem(item.id)}>
+                <Trash2 />
+                Remove
+              </Button>
+            )}
+          </CardHeader>
+          {item && (
+            <CardContent className="grid gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="grid gap-1.5">
+                  <Label className="text-muted-foreground">Name</Label>
+                  <Input
+                    value={item.name}
+                    onChange={(e) => updateCapexLineItem(item.id, { name: e.target.value })}
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-muted-foreground">Category</Label>
+                  <Select
+                    value={item.category}
+                    onValueChange={(v) =>
+                      updateCapexLineItem(item.id, { category: v as CapexCategory })
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(CAPEX_CATEGORY_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Escalation</Label>
+                <Select
+                  value={item.escalation.type}
+                  onValueChange={(v) =>
+                    updateCapexLineItem(item.id, {
+                      escalation: { ...item.escalation, type: v as EscalationType },
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(ESCALATION_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {item.escalation.type !== 'manual' && item.escalation.type !== 'percentOfRevenue' && (
+                <SliderInput
+                  label="Base Annual Amount"
+                  value={item.baseAnnualAmount}
+                  onChange={(v) => updateCapexLineItem(item.id, { baseAnnualAmount: v })}
+                  min={0}
+                  max={25_000_000}
+                  step={25_000}
+                  formatValue={(v) => formatCurrency(v)}
+                />
+              )}
+
+              {item.escalation.type === 'percentGrowth' && (
+                <SliderInput
+                  label="Annual Growth Rate"
+                  value={item.escalation.growthRate ?? 0}
+                  onChange={(v) =>
+                    updateCapexLineItem(item.id, {
+                      escalation: { ...item.escalation, growthRate: v },
+                    })
+                  }
+                  min={-0.1}
+                  max={0.2}
+                  step={0.0025}
+                  formatValue={(v) => formatPercent(v, 2)}
+                />
+              )}
+
+              {item.escalation.type === 'percentOfRevenue' && (
+                <SliderInput
+                  label="% of Total Revenue"
+                  value={item.escalation.percentOfRevenue ?? 0}
+                  onChange={(v) =>
+                    updateCapexLineItem(item.id, {
+                      escalation: { ...item.escalation, percentOfRevenue: v },
+                    })
+                  }
+                  min={0}
+                  max={0.2}
+                  step={0.0025}
+                  formatValue={(v) => formatPercent(v, 2)}
+                />
+              )}
+
+              {item.escalation.type === 'manual' && (
+                <p className="text-muted-foreground bg-muted/50 rounded-lg p-3 text-xs">
+                  Set this item's dollar amount for each year directly in the per-year table below
+                  — e.g. most of the spend in Year 1 (construction) and the remainder in Year 2.
+                  Years without a value are $0.
+                </p>
+              )}
+
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Per-Year Amount ($) — override any year</Label>
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+                  {years.map((year) => {
+                    const computed = resolveLineItemAnnualAmount(
+                      item,
+                      year,
+                      revenueByYear.get(year) ?? 0,
+                    );
+                    const isOverridden = item.yearOverrides[year] !== undefined;
+                    return (
+                      <div key={year} className="grid gap-1">
+                        <span className="text-muted-foreground text-[11px]">Yr {year}</span>
+                        <Input
+                          className={`h-8 text-xs ${isOverridden ? 'border-primary' : ''}`}
+                          value={Math.round(computed).toString()}
+                          onChange={(e) => {
+                            const num = Number(e.target.value.replace(/[^0-9.-]/g, ''));
+                            if (!Number.isNaN(num)) setCapexLineItemYearOverride(item.id, year, num);
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                {Object.keys(item.yearOverrides).length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-fit"
+                    onClick={() => {
+                      for (const year of Object.keys(item.yearOverrides).map(Number)) {
+                        setCapexLineItemYearOverride(item.id, year, undefined);
+                      }
+                    }}
+                  >
+                    Clear all overrides
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>All CapEx by Year</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ExpenseByYearTable
+            items={current.capexLineItems}
+            years={years}
+            revenueByYear={revenueByYear}
+            totalByYear={totalCapexByYear}
+            totalLabel="Total CapEx"
           />
         </CardContent>
       </Card>
@@ -282,12 +568,14 @@ function ExpenseByYearTable({
   items,
   years,
   revenueByYear,
-  totalOpexByYear,
+  totalByYear,
+  totalLabel,
 }: {
-  items: ExpenseLineItem[];
+  items: (ExpenseLineItem | CapexLineItem)[];
   years: number[];
   revenueByYear: Map<number, number>;
-  totalOpexByYear: number[];
+  totalByYear: number[];
+  totalLabel: string;
 }) {
   interface Row {
     label: string;
@@ -296,10 +584,10 @@ function ExpenseByYearTable({
   }
 
   const rows: Row[] = items.map((item) => ({
-    label: item.name || 'Untitled Expense',
+    label: item.name || 'Untitled',
     values: years.map((year) => resolveLineItemAnnualAmount(item, year, revenueByYear.get(year) ?? 0)),
   }));
-  rows.push({ label: 'Total Operating Expenses', isTotal: true, values: totalOpexByYear });
+  rows.push({ label: totalLabel, isTotal: true, values: totalByYear });
 
   const columns: DataTableColumn<Row>[] = [
     { key: 'label', header: 'Line Item', render: (r) => r.label },

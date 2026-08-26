@@ -44,7 +44,11 @@ export function AssumptionsDashboard() {
   const equityPct = totalSources > 0 ? equityCapital / totalSources : 0;
   const annualInterestYr1 = capital.totalDebt * capital.interestRate;
 
-  const totalCapex = construction.hardCapex + construction.softCosts + construction.contingency;
+  const totalCapex =
+    outputs.sourcesAndUses.uses.hardCapex +
+    outputs.sourcesAndUses.uses.softCosts +
+    outputs.sourcesAndUses.uses.contingency +
+    outputs.sourcesAndUses.uses.otherCapex;
   const preRevenueOpexTotal =
     construction.constructionOpexPerMonth * construction.constructionDurationMonths;
   const dsrAmount = outputs.sourcesAndUses.uses.debtServiceReserve;
@@ -145,33 +149,18 @@ export function AssumptionsDashboard() {
             <CardTitle>Construction Costs</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <SliderInput
-              label="Hard CapEx"
-              value={construction.hardCapex}
-              onChange={(v) => updateConstruction({ hardCapex: v })}
-              min={2_000_000}
-              max={25_000_000}
-              step={50_000}
-              formatValue={(v) => formatCurrency(v)}
-            />
-            <SliderInput
-              label="Soft Costs"
-              value={construction.softCosts}
-              onChange={(v) => updateConstruction({ softCosts: v })}
-              min={0}
-              max={5_000_000}
-              step={25_000}
-              formatValue={(v) => formatCurrency(v)}
-            />
-            <SliderInput
-              label="Contingency"
-              value={construction.contingency}
-              onChange={(v) => updateConstruction({ contingency: v })}
-              min={0}
-              max={3_000_000}
-              step={25_000}
-              formatValue={(v) => formatCurrency(v)}
-            />
+            <div className="bg-muted/50 grid grid-cols-1 gap-y-1.5 rounded-lg p-3 text-sm">
+              <StatRow label="Hard CapEx" value={formatCurrency(outputs.sourcesAndUses.uses.hardCapex)} />
+              <StatRow label="Soft Costs" value={formatCurrency(outputs.sourcesAndUses.uses.softCosts)} />
+              <StatRow label="Contingency" value={formatCurrency(outputs.sourcesAndUses.uses.contingency)} />
+              {outputs.sourcesAndUses.uses.otherCapex > 0 && (
+                <StatRow label="Other Capital Costs" value={formatCurrency(outputs.sourcesAndUses.uses.otherCapex)} />
+              )}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Detailed CapEx line items (with per-year construction spend) are entered under{' '}
+              <span className="font-medium">Expense Items → Construction / CapEx</span>.
+            </p>
             <SliderInput
               label="Construction OpEx / Month"
               value={construction.constructionOpexPerMonth}
@@ -421,6 +410,9 @@ export function AssumptionsDashboard() {
                   <StatRow label="Hard CapEx" value={formatCurrency(outputs.sourcesAndUses.uses.hardCapex)} />
                   <StatRow label="Soft Costs" value={formatCurrency(outputs.sourcesAndUses.uses.softCosts)} />
                   <StatRow label="Contingency" value={formatCurrency(outputs.sourcesAndUses.uses.contingency)} />
+                  {outputs.sourcesAndUses.uses.otherCapex > 0 && (
+                    <StatRow label="Other CapEx" value={formatCurrency(outputs.sourcesAndUses.uses.otherCapex)} />
+                  )}
                   <StatRow label="Pre-Rev OpEx" value={formatCurrency(outputs.sourcesAndUses.uses.preRevenueOpex)} />
                   <StatRow label="DSR" value={formatCurrency(outputs.sourcesAndUses.uses.debtServiceReserve)} />
                   <StatRow label="Working Capital" value={formatCurrency(outputs.sourcesAndUses.uses.workingCapitalBuffer)} />

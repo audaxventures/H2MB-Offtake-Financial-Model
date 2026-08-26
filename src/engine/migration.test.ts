@@ -31,6 +31,9 @@ describe('legacy migration', () => {
     expect(migrated.expenseLineItems).toHaveLength(1);
     expect(migrated.expenseLineItems[0].yearOverrides).toEqual({ 2: 850000, 3: 1345000 });
     expect(migrated.modelSettings.totalYears).toBeGreaterThanOrEqual(5);
+    expect(migrated.capexLineItems).toHaveLength(3);
+    const totalCapex = migrated.capexLineItems.reduce((acc, i) => acc + (i.yearOverrides[1] ?? 0), 0);
+    expect(totalCapex).toBe(10000000 + 1000000 + 750000);
 
     // Should compute without throwing and produce sane, non-zero Year 3 revenue.
     const outputs = runModel(migrated);

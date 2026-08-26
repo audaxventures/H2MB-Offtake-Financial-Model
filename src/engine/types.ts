@@ -9,9 +9,6 @@ export interface CapitalStructure {
 }
 
 export interface ConstructionCosts {
-  hardCapex: number;
-  softCosts: number;
-  contingency: number;
   constructionOpexPerMonth: number;
   constructionDurationMonths: number;
   debtServiceReserveMonths: number;
@@ -120,19 +117,51 @@ export interface EscalationConfig {
 }
 
 /**
- * A single line-item expense (e.g. "Salaries & Benefits", "Property
- * Insurance"). The annual amount for any given year is resolved by
- * `resolveLineItemAnnualAmount()` from baseAnnualAmount + escalation,
- * with yearOverrides taking precedence when present.
+ * Shared shape for any line item whose annual dollar amount is resolved by
+ * `resolveLineItemAnnualAmount()` from baseAnnualAmount + escalation, with
+ * yearOverrides taking precedence when present. Both operating expense line
+ * items and CapEx line items are built on this.
  */
-export interface ExpenseLineItem {
-  id: string;
-  name: string;
-  category: ExpenseCategory;
+export interface EscalatedLineItem {
   startYear: number;
   baseAnnualAmount: number;
   escalation: EscalationConfig;
   yearOverrides: Record<number, number>;
+}
+
+/**
+ * A single line-item expense (e.g. "Salaries & Benefits", "Property
+ * Insurance"). Rolls into the operating P&L under its category.
+ */
+export interface ExpenseLineItem extends EscalatedLineItem {
+  id: string;
+  name: string;
+  category: ExpenseCategory;
+}
+
+export type CapexCategory = 'hardCapex' | 'softCosts' | 'contingency' | 'other';
+
+export const CAPEX_CATEGORY_LABELS: Record<CapexCategory, string> = {
+  hardCapex: 'Hard CapEx (Equipment & Construction)',
+  softCosts: 'Soft Costs (Engineering, Permitting, etc.)',
+  contingency: 'Contingency',
+  other: 'Other Capital Costs',
+};
+
+/**
+ * A single detailed capital cost item (e.g. "Electrolyzer Package", "EPC
+ * Contract", "Site Preparation"). Unlike operating expenses, CapEx is
+ * capitalized rather than expensed — it funds Sources & Uses and the
+ * depreciation base, not EBITDA — but is still spread across whichever
+ * year(s) the money is actually spent (typically the construction window),
+ * via the same escalation/yearOverrides mechanism as ExpenseLineItem. Most
+ * CapEx items use 'manual' escalation with explicit per-year overrides,
+ * since capital spending is lumpy rather than a smooth annual run-rate.
+ */
+export interface CapexLineItem extends EscalatedLineItem {
+  id: string;
+  name: string;
+  category: CapexCategory;
 }
 
 export interface Scenario {
@@ -146,6 +175,7 @@ export interface Scenario {
   modelSettings: ModelSettings;
   revenueStreams: RevenueStream[];
   expenseLineItems: ExpenseLineItem[];
+  capexLineItems: CapexLineItem[];
 }
 
 /** A single quarter (years 1..quarterlyYears) or year (beyond) on the model timeline. */
@@ -178,6 +208,8 @@ export interface PeriodResult extends ModelPeriod {
   preRevenueOpex: number;
   expensesByCategory: Partial<Record<ExpenseCategory, number>>;
   totalOperatingExpenses: number;
+  capexSpend: number;
+  capexByCategory: Partial<Record<CapexCategory, number>>;
   ebitda: number;
   openingDebtBalance: number;
   interest: number;
@@ -200,6 +232,9 @@ export interface AnnualResult {
   preRevenueOpex: number;
   expensesByCategory: Partial<Record<ExpenseCategory, number>>;
   totalOperatingExpenses: number;
+  capexSpend: number;
+  capexByCategory: Partial<Record<CapexCategory, number>>;
+  cumulativeCapexSpend: number;
   ebitda: number;
   ebitdaMarginPct: number | null;
   depreciation: number;
@@ -229,6 +264,7 @@ export interface SourcesAndUses {
     hardCapex: number;
     softCosts: number;
     contingency: number;
+    otherCapex: number;
     preRevenueOpex: number;
     debtServiceReserve: number;
     workingCapitalBuffer: number;

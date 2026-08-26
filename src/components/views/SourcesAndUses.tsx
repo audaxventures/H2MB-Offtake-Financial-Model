@@ -26,7 +26,7 @@ export function SourcesAndUses() {
   const payoffWithoutITC = useMemo(() => computeDebtPayoffQuarter(current, 0), [current]);
   const noItcIRR = computeEquityIRRFromScenario(current, noItcOutputs.annual);
 
-  const eligibleCapex = current.construction.hardCapex + current.construction.softCosts;
+  const eligibleCapex = outputs.sourcesAndUses.uses.hardCapex + outputs.sourcesAndUses.uses.softCosts;
   const itcPctOfCapex = eligibleCapex > 0 ? current.itc.amount / eligibleCapex : 0;
 
   const savingsChartData = [
@@ -73,6 +73,9 @@ export function SourcesAndUses() {
             <LineRow label="Hard CapEx" value={formatCurrency(sourcesAndUses.uses.hardCapex)} />
             <LineRow label="Soft Costs" value={formatCurrency(sourcesAndUses.uses.softCosts)} />
             <LineRow label="Contingency" value={formatCurrency(sourcesAndUses.uses.contingency)} />
+            {sourcesAndUses.uses.otherCapex > 0 && (
+              <LineRow label="Other Capital Costs" value={formatCurrency(sourcesAndUses.uses.otherCapex)} />
+            )}
             <LineRow
               label={`Pre-Revenue OpEx (${current.construction.constructionDurationMonths} mo × ${formatCurrency(current.construction.constructionOpexPerMonth / 1000)}k)`}
               value={formatCurrency(sourcesAndUses.uses.preRevenueOpex)}

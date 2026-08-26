@@ -5,6 +5,7 @@ import {
   calculateDSRAmount,
   computeAnnualSummary,
   computeBreakEvenPricePerKg,
+  computeCapexByCategory,
   computeDebtPayoffQuarter,
   computeEquityIRRFromScenario,
   computeEquityPaybackYear,
@@ -12,6 +13,7 @@ import {
   computeMinDSCR,
   computeModelPeriods,
   computeSourcesAndUses,
+  computeTotalCapex,
   findITCPeriodIndex,
   firstOperatingYear,
   generatePeriods,
@@ -383,8 +385,7 @@ describe('computeAnnualSummary', () => {
   });
 
   it('computes straight-line D&A over 20 years with 5% salvage, starting the first operating year', () => {
-    const totalCapex =
-      scenario.construction.hardCapex + scenario.construction.softCosts + scenario.construction.contingency;
+    const totalCapex = computeTotalCapex(scenario);
     const expectedAnnualDNA = (totalCapex * 0.95) / 20;
     expect(annual[0].depreciation).toBe(0);
     for (const a of annual.slice(1)) {
@@ -455,9 +456,7 @@ describe('Sources & Uses', () => {
       6,
     );
     expect(su.uses.total).toBeCloseTo(
-      scenario.construction.hardCapex +
-        scenario.construction.softCosts +
-        scenario.construction.contingency +
+      computeTotalCapex(scenario) +
         scenario.construction.constructionOpexPerMonth * scenario.construction.constructionDurationMonths +
         calculateDSRAmount(scenario) +
         scenario.construction.workingCapitalBuffer,
@@ -468,10 +467,57 @@ describe('Sources & Uses', () => {
 
   it('flags a funding gap when uses exceed sources', () => {
     const scenario = createDefaultScenario();
-    scenario.construction.hardCapex = 50_000_000;
+    scenario.capexLineItems[0].yearOverrides[1] = 50_000_000;
     const su = computeSourcesAndUses(scenario);
     expect(su.surplusOrGap).toBeLessThan(0);
     expect(su.isFullyFunded).toBe(false);
+  });
+});
+
+describe('CapEx line items (phased construction spending)', () => {
+  it('sums the default CapEx line items to $11.75M across categories', () => {
+    const scenario = createDefaultScenario();
+    const byCategory = computeCapexByCategory(scenario);
+    expect(byCategory.hardCapex).toBeCloseTo(10_000_000, 6);
+    expect(byCategory.softCosts).toBeCloseTo(1_000_000, 6);
+    expect(byCategory.contingency).toBeCloseTo(750_000, 6);
+    expect(computeTotalCapex(scenario)).toBeCloseTo(11_750_000, 6);
+  });
+
+  it('spreads a CapEx item across the years given in yearOverrides, prorated by period within each year', () => {
+    const scenario = createDefaultScenario();
+    const periods = computeModelPeriods(scenario);
+    const year1Periods = periods.filter((p) => p.year === 1);
+    const year2Periods = periods.filter((p) => p.year === 2);
+
+    // Default hard CapEx item: $8.5M in Year 1, $1.5M in Year 2, each spread
+    // evenly across that year's 4 quarters.
+    const year1CapexSpend = sum(year1Periods.map((p) => p.capexSpend));
+    const year2CapexSpend = sum(year2Periods.map((p) => p.capexSpend));
+    expect(year1CapexSpend).toBeCloseTo(8_500_000 + 1_000_000 + 750_000, 6);
+    expect(year2CapexSpend).toBeCloseTo(1_500_000, 6);
+  });
+
+  it('does not affect EBITDA — CapEx is capitalized, not expensed', () => {
+    const withCapex = createDefaultScenario();
+    const withoutCapex = { ...withCapex, capexLineItems: [] };
+    const periodsWith = computeModelPeriods(withCapex);
+    const periodsWithout = computeModelPeriods(withoutCapex);
+    for (let i = 0; i < periodsWith.length; i++) {
+      expect(periodsWith[i].ebitda).toBeCloseTo(periodsWithout[i].ebitda, 6);
+      expect(periodsWith[i].netCash).toBeCloseTo(periodsWithout[i].netCash, 6);
+    }
+  });
+
+  it('accumulates cumulativeCapexSpend up to the total once all CapEx years have passed', () => {
+    const scenario = createDefaultScenario();
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
+    const totalCapex = computeTotalCapex(scenario);
+    for (const a of annual) {
+      expect(a.cumulativeCapexSpend).toBeLessThanOrEqual(totalCapex + 1e-6);
+    }
+    expect(annual[annual.length - 1].cumulativeCapexSpend).toBeCloseTo(totalCapex, 6);
   });
 });
 

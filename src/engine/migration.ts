@@ -7,6 +7,7 @@ import {
   createDefaultScenario,
 } from './defaults';
 import type {
+  CapexLineItem,
   CapitalStructure,
   ConstructionCosts,
   ExpenseLineItem,
@@ -17,6 +18,46 @@ import type {
   RevenueStream,
   Scenario,
 } from './types';
+
+/** The construction cost shape before hardCapex/softCosts/contingency were split out into capexLineItems. */
+interface LegacyConstructionCosts {
+  hardCapex?: number;
+  softCosts?: number;
+  contingency?: number;
+  constructionOpexPerMonth?: number;
+  constructionDurationMonths?: number;
+  debtServiceReserveMonths?: number;
+  workingCapitalBuffer?: number;
+}
+
+/**
+ * Converts old flat hardCapex/softCosts/contingency lump sums into detailed
+ * CapEx line items (one per non-zero bucket, booked entirely in Year 1 to
+ * match the pre-rewrite behavior of treating them as instantly-available
+ * Sources & Uses figures) — so old scenarios keep the exact same totals
+ * while gaining the new per-year editable structure.
+ */
+function synthesizeCapexLineItems(raw: LegacyConstructionCosts | undefined): CapexLineItem[] {
+  const entries: Array<{ category: CapexLineItem['category']; name: string; amount: number | undefined }> = [
+    { category: 'hardCapex', name: 'Hard CapEx (migrated)', amount: raw?.hardCapex },
+    { category: 'softCosts', name: 'Soft Costs (migrated)', amount: raw?.softCosts },
+    { category: 'contingency', name: 'Contingency (migrated)', amount: raw?.contingency },
+  ];
+  const items: CapexLineItem[] = [];
+  for (const { category, name, amount } of entries) {
+    if (!amount) continue;
+    items.push({
+      id: generateId(),
+      name,
+      category,
+      startYear: 1,
+      baseAnnualAmount: 0,
+      escalation: { type: 'manual' },
+      yearOverrides: { 1: amount },
+    });
+  }
+  return items;
+}
 
 /**
  * A scenario shape from before the multi-stream-revenue / line-item-expense
@@ -29,7 +70,7 @@ interface LegacyScenario {
   name?: string;
   createdAt?: string | Date;
   capital?: Partial<CapitalStructure>;
-  construction?: Partial<ConstructionCosts>;
+  construction?: LegacyConstructionCosts;
   itc?: Partial<ITCSettings>;
   production?: {
     offtakeMode?: 'trucks' | 'direct';
@@ -129,25 +170,53 @@ function convertLegacyScenario(raw: LegacyScenario): Scenario {
     maxDailyCapacityKg: production.maxDailyCapacityKg ?? DEFAULT_PLANT.maxDailyCapacityKg,
   };
 
+  const construction: ConstructionCosts = {
+    constructionOpexPerMonth:
+      raw.construction?.constructionOpexPerMonth ?? DEFAULT_CONSTRUCTION.constructionOpexPerMonth,
+    constructionDurationMonths:
+      raw.construction?.constructionDurationMonths ?? DEFAULT_CONSTRUCTION.constructionDurationMonths,
+    debtServiceReserveMonths:
+      raw.construction?.debtServiceReserveMonths ?? DEFAULT_CONSTRUCTION.debtServiceReserveMonths,
+    workingCapitalBuffer:
+      raw.construction?.workingCapitalBuffer ?? DEFAULT_CONSTRUCTION.workingCapitalBuffer,
+  };
+
   return {
     id: raw.id ?? generateId(),
     name: raw.name ?? 'Migrated Scenario',
     createdAt: raw.createdAt ? new Date(raw.createdAt) : new Date(),
     capital: { ...DEFAULT_CAPITAL, ...raw.capital },
-    construction: { ...DEFAULT_CONSTRUCTION, ...raw.construction },
+    construction,
     itc: { ...DEFAULT_ITC, ...raw.itc },
     plant,
     modelSettings,
     revenueStreams: [revenueStream],
     expenseLineItems: [expenseLineItem],
+    capexLineItems: synthesizeCapexLineItems(raw.construction),
   };
 }
 
 /** Defensive backfill for a scenario that's already the current shape, in case future fields get added. */
 function backfillCurrentShape(raw: Scenario): Scenario {
+  const rawConstruction = raw.construction as (ConstructionCosts & LegacyConstructionCosts) | undefined;
+  const hasCapexLineItems = Array.isArray(raw.capexLineItems) && raw.capexLineItems.length > 0;
+
   return {
     ...raw,
     createdAt: new Date(raw.createdAt),
+    construction: {
+      constructionOpexPerMonth:
+        rawConstruction?.constructionOpexPerMonth ?? DEFAULT_CONSTRUCTION.constructionOpexPerMonth,
+      constructionDurationMonths:
+        rawConstruction?.constructionDurationMonths ?? DEFAULT_CONSTRUCTION.constructionDurationMonths,
+      debtServiceReserveMonths:
+        rawConstruction?.debtServiceReserveMonths ?? DEFAULT_CONSTRUCTION.debtServiceReserveMonths,
+      workingCapitalBuffer:
+        rawConstruction?.workingCapitalBuffer ?? DEFAULT_CONSTRUCTION.workingCapitalBuffer,
+    },
+    capexLineItems: hasCapexLineItems
+      ? raw.capexLineItems.map((item) => ({ ...item, yearOverrides: item.yearOverrides ?? {} }))
+      : synthesizeCapexLineItems(rawConstruction),
     plant: { ...DEFAULT_PLANT, ...raw.plant },
     revenueStreams: (raw.revenueStreams ?? []).map((s) => ({
       ...s,

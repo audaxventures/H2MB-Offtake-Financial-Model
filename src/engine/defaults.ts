@@ -1,5 +1,6 @@
 import { generateId } from '../lib/id';
 import type {
+  CapexLineItem,
   CapitalStructure,
   ConstructionCosts,
   ExpenseLineItem,
@@ -22,9 +23,6 @@ export const DEFAULT_CAPITAL: CapitalStructure = {
 };
 
 export const DEFAULT_CONSTRUCTION: ConstructionCosts = {
-  hardCapex: 10_000_000,
-  softCosts: 1_000_000,
-  contingency: 750_000,
   constructionOpexPerMonth: 30_000,
   constructionDurationMonths: 15,
   debtServiceReserveMonths: 3,
@@ -184,6 +182,45 @@ export function createDefaultExpenseLineItems(): ExpenseLineItem[] {
   ];
 }
 
+/**
+ * Detailed CapEx line items replacing the old flat Hard CapEx/Soft
+ * Costs/Contingency lump sums — same totals ($10M/$1M/$750k), but now spread
+ * across the construction window (most of the equipment spend lands in
+ * Year 1, with the balance carrying into Year 2) to show how phased
+ * construction spending is entered.
+ */
+export function createDefaultCapexLineItems(): CapexLineItem[] {
+  return [
+    {
+      id: generateId(),
+      name: 'Electrolyzer & Balance of Plant',
+      category: 'hardCapex',
+      startYear: 1,
+      baseAnnualAmount: 0,
+      escalation: { type: 'manual' },
+      yearOverrides: { 1: 8_500_000, 2: 1_500_000 },
+    },
+    {
+      id: generateId(),
+      name: 'Engineering, Permitting & Soft Costs',
+      category: 'softCosts',
+      startYear: 1,
+      baseAnnualAmount: 0,
+      escalation: { type: 'manual' },
+      yearOverrides: { 1: 1_000_000 },
+    },
+    {
+      id: generateId(),
+      name: 'Construction Contingency',
+      category: 'contingency',
+      startYear: 1,
+      baseAnnualAmount: 0,
+      escalation: { type: 'manual' },
+      yearOverrides: { 1: 750_000 },
+    },
+  ];
+}
+
 export function createDefaultScenario(name = 'Base Case'): Scenario {
   const modelSettings = { ...DEFAULT_MODEL_SETTINGS };
   return {
@@ -197,5 +234,6 @@ export function createDefaultScenario(name = 'Base Case'): Scenario {
     modelSettings,
     revenueStreams: [createDefaultRevenueStream(modelSettings)],
     expenseLineItems: createDefaultExpenseLineItems(),
+    capexLineItems: createDefaultCapexLineItems(),
   };
 }

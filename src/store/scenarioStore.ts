@@ -6,6 +6,7 @@ import { generatePeriods } from '@/engine/calculations';
 import { migrateScenario } from '@/engine/migration';
 import { generateId } from '@/lib/id';
 import type {
+  CapexLineItem,
   CapitalStructure,
   ConstructionCosts,
   ExpenseLineItem,
@@ -34,6 +35,11 @@ function deepCopyScenario(scenario: Scenario): Scenario {
       periods: s.periods.map((p) => ({ ...p })),
     })),
     expenseLineItems: scenario.expenseLineItems.map((item) => ({
+      ...item,
+      escalation: { ...item.escalation },
+      yearOverrides: { ...item.yearOverrides },
+    })),
+    capexLineItems: scenario.capexLineItems.map((item) => ({
       ...item,
       escalation: { ...item.escalation },
       yearOverrides: { ...item.yearOverrides },
@@ -106,6 +112,18 @@ function createBlankExpenseLineItem(): ExpenseLineItem {
   };
 }
 
+function createBlankCapexLineItem(): CapexLineItem {
+  return {
+    id: generateId(),
+    name: 'New CapEx Item',
+    category: 'hardCapex',
+    startYear: 1,
+    baseAnnualAmount: 0,
+    escalation: { type: 'manual' },
+    yearOverrides: { 1: 0 },
+  };
+}
+
 interface ScenarioStoreState {
   current: Scenario;
   savedScenarios: Scenario[];
@@ -138,6 +156,14 @@ interface ScenarioStoreState {
     patch: Partial<Omit<ExpenseLineItem, 'id' | 'yearOverrides'>>,
   ) => void;
   setLineItemYearOverride: (itemId: string, year: number, value: number | undefined) => void;
+
+  addCapexLineItem: () => void;
+  removeCapexLineItem: (itemId: string) => void;
+  updateCapexLineItem: (
+    itemId: string,
+    patch: Partial<Omit<CapexLineItem, 'id' | 'yearOverrides'>>,
+  ) => void;
+  setCapexLineItemYearOverride: (itemId: string, year: number, value: number | undefined) => void;
 
   setCurrentName: (name: string) => void;
   replaceCurrent: (scenario: Scenario) => void;
@@ -276,6 +302,49 @@ export const useScenarioStore = create<ScenarioStoreState>()(
           current: {
             ...state.current,
             expenseLineItems: state.current.expenseLineItems.map((i) => {
+              if (i.id !== itemId) return i;
+              const yearOverrides = { ...i.yearOverrides };
+              if (value === undefined) {
+                delete yearOverrides[year];
+              } else {
+                yearOverrides[year] = value;
+              }
+              return { ...i, yearOverrides };
+            }),
+          },
+        })),
+
+      addCapexLineItem: () =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            capexLineItems: [...state.current.capexLineItems, createBlankCapexLineItem()],
+          },
+        })),
+
+      removeCapexLineItem: (itemId) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            capexLineItems: state.current.capexLineItems.filter((i) => i.id !== itemId),
+          },
+        })),
+
+      updateCapexLineItem: (itemId, patch) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            capexLineItems: state.current.capexLineItems.map((i) =>
+              i.id === itemId ? { ...i, ...patch } : i,
+            ),
+          },
+        })),
+
+      setCapexLineItemYearOverride: (itemId, year, value) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            capexLineItems: state.current.capexLineItems.map((i) => {
               if (i.id !== itemId) return i;
               const yearOverrides = { ...i.yearOverrides };
               if (value === undefined) {

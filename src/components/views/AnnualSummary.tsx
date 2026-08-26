@@ -6,8 +6,8 @@ import { RevenueEBITDAChart } from '@/components/charts/RevenueEBITDAChart';
 import { DebtWaterfallChart } from '@/components/charts/DebtWaterfallChart';
 import { DSCRChart } from '@/components/charts/DSCRChart';
 import { cn } from '@/lib/utils';
-import { EXPENSE_CATEGORY_LABELS } from '@/engine/types';
-import type { AnnualResult, ExpenseCategory } from '@/engine/types';
+import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
+import type { AnnualResult, CapexCategory, ExpenseCategory } from '@/engine/types';
 import { formatCurrency, formatDSCR, formatPercent } from '@/engine/formatters';
 import { useScenarioStore } from '@/store/scenarioStore';
 import { useModelOutputs } from '@/store/useModelOutputs';
@@ -40,11 +40,44 @@ export function AnnualSummary() {
     return Array.from(set);
   }, [current.expenseLineItems, annual]);
 
+  const usedCapexCategories = useMemo(() => {
+    const set = new Set<CapexCategory>();
+    for (const item of current.capexLineItems) set.add(item.category);
+    for (const a of annual) {
+      for (const category of Object.keys(a.capexByCategory) as CapexCategory[]) set.add(category);
+    }
+    return Array.from(set);
+  }, [current.capexLineItems, annual]);
+
   const rows: RowSpec[] = [
     { key: 'revenue', section: 'Revenue', label: 'Hydrogen Sales Revenue', render: (a) => formatCurrency(a.revenue) },
     { key: 'cogs', label: 'Cost of Goods Sold', render: (a) => formatCurrency(-a.cogs) },
     { key: 'grossProfit', label: 'Gross Profit', render: (a) => formatCurrency(a.grossProfit), emphasis: true },
     { key: 'grossMargin', label: 'Gross Margin %', render: (a) => formatPercent(a.grossMarginPct) },
+
+    ...usedCapexCategories.map(
+      (category, idx): RowSpec => ({
+        key: `capex-${category}`,
+        section: idx === 0 ? 'Construction / Capital Expenditures' : undefined,
+        label: CAPEX_CATEGORY_LABELS[category],
+        render: (a) => formatCurrency(-(a.capexByCategory[category] ?? 0)),
+      }),
+    ),
+    ...(usedCapexCategories.length > 0
+      ? [
+          {
+            key: 'capexTotal',
+            label: 'Total CapEx Spend',
+            render: (a: AnnualResult) => formatCurrency(-a.capexSpend),
+            emphasis: true,
+          },
+          {
+            key: 'capexCumulative',
+            label: 'Cumulative CapEx Spent',
+            render: (a: AnnualResult) => formatCurrency(a.cumulativeCapexSpend),
+          },
+        ]
+      : []),
 
     {
       key: 'preRevenueOpex',

@@ -81,6 +81,9 @@ export const PDFExportLayout = forwardRef<HTMLDivElement, PDFExportLayoutProps>(
               ['Hard CapEx', formatCurrency(outputs.sourcesAndUses.uses.hardCapex)],
               ['Soft Costs', formatCurrency(outputs.sourcesAndUses.uses.softCosts)],
               ['Contingency', formatCurrency(outputs.sourcesAndUses.uses.contingency)],
+              ...(outputs.sourcesAndUses.uses.otherCapex > 0
+                ? ([['Other CapEx', formatCurrency(outputs.sourcesAndUses.uses.otherCapex)]] as [string, string][])
+                : []),
               ['Pre-Rev OpEx', formatCurrency(outputs.sourcesAndUses.uses.preRevenueOpex)],
               ['DSR', formatCurrency(outputs.sourcesAndUses.uses.debtServiceReserve)],
               ['Total Uses', formatCurrency(outputs.sourcesAndUses.uses.total)],
