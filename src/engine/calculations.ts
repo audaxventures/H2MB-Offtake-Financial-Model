@@ -184,8 +184,26 @@ export function resolveLineItemAnnualAmount(
   }
 }
 
-/** First period (in timeline order) in which the ITC is received. */
-export function findITCPeriodIndex(periods: ModelPeriod[], receivedInYear: number): number {
+/**
+ * The period (in timeline order) in which the ITC is received. When
+ * receivedInQuarter is set and receivedInYear falls within the quarterly
+ * window, targets that exact quarter; otherwise falls back to the first
+ * non-construction quarter of the year, or its last quarter if the whole
+ * year is construction (receivedInQuarter has no effect on an annual period,
+ * since annual periods don't have quarters).
+ */
+export function findITCPeriodIndex(
+  periods: ModelPeriod[],
+  receivedInYear: number,
+  receivedInQuarter: number | null,
+): number {
+  if (receivedInQuarter !== null) {
+    const exactIndex = periods.findIndex(
+      (p) => p.year === receivedInYear && p.quarter === receivedInQuarter,
+    );
+    if (exactIndex !== -1) return exactIndex;
+  }
+
   const firstRevenueInYear = periods.findIndex(
     (p) => p.year === receivedInYear && !p.isConstruction,
   );
@@ -245,7 +263,7 @@ export function computeModelPeriods(
   const { capital, construction, itc, revenueStreams, expenseLineItems, capexLineItems } = scenario;
   const periods = buildPeriods(scenario);
   const itcAmount = itcOverrideAmount ?? itc.amount;
-  const itcPeriodIndex = findITCPeriodIndex(periods, itc.receivedInYear);
+  const itcPeriodIndex = findITCPeriodIndex(periods, itc.receivedInYear, itc.receivedInQuarter);
 
   const amortYears = Math.max(capital.loanTenor - capital.gracePeriod, 0);
   const annualScheduledPrincipal = amortYears > 0 ? capital.totalDebt / amortYears : 0;
@@ -262,24 +280,25 @@ export function computeModelPeriods(
     const streamRevenue = sum(streamBreakdown.map((s) => s.revenue));
     const streamCogs = sum(streamBreakdown.map((s) => s.cogs));
 
-    // Construction-phase overhead (constructionOpexPerMonth) is tracked
-    // separately from categorized expense line items — it's a fixed
-    // pre-revenue cost, not a user-defined operating expense category, and
-    // folding it into e.g. the 'other' category would make a custom "Other"
-    // line item look like it includes costs the user never entered.
+    // Construction-phase overhead (constructionOpexPerMonth) is an optional,
+    // additive lump sum for pre-revenue months — separate from categorized
+    // expense line items, which apply in every year they're eligible for
+    // (per their own startYear) regardless of construction status. A user
+    // who'd rather model pre-revenue costs as explicit line items can leave
+    // constructionOpexPerMonth at $0 without losing anything.
     let preRevenueOpex = 0;
-    const expensesByCategory: Partial<Record<ExpenseCategory, number>> = {};
     if (period.isConstruction) {
       const monthsInPeriod = period.periodsPerYear === 4 ? 3 : 12;
       preRevenueOpex = construction.constructionOpexPerMonth * monthsInPeriod;
-    } else {
-      const annualRevenueForYear = revenueByYear.get(period.year) ?? 0;
-      for (const item of expenseLineItems) {
-        const annualAmount = resolveLineItemAnnualAmount(item, period.year, annualRevenueForYear);
-        if (annualAmount === 0) continue;
-        const periodAmount = annualAmount * period.periodFraction;
-        expensesByCategory[item.category] = (expensesByCategory[item.category] ?? 0) + periodAmount;
-      }
+    }
+
+    const expensesByCategory: Partial<Record<ExpenseCategory, number>> = {};
+    const annualRevenueForYear = revenueByYear.get(period.year) ?? 0;
+    for (const item of expenseLineItems) {
+      const annualAmount = resolveLineItemAnnualAmount(item, period.year, annualRevenueForYear);
+      if (annualAmount === 0) continue;
+      const periodAmount = annualAmount * period.periodFraction;
+      expensesByCategory[item.category] = (expensesByCategory[item.category] ?? 0) + periodAmount;
     }
 
     const cogsFromLineItems = expensesByCategory.cogs ?? 0;
@@ -648,6 +667,7 @@ export function computeDebtPayoffQuarter(
   const constructionQuarters = Math.round(construction.constructionDurationMonths / 3);
   const itcQuarterIndex = (() => {
     const yearStartIndex = (itc.receivedInYear - 1) * 4;
+    if (itc.receivedInQuarter !== null) return yearStartIndex + (itc.receivedInQuarter - 1);
     for (let q = 0; q < 4; q++) {
       const idx = yearStartIndex + q;
       if (idx >= constructionQuarters) return idx; // first non-construction quarter in that year

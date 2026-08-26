@@ -32,6 +32,7 @@ export const DEFAULT_CONSTRUCTION: ConstructionCosts = {
 export const DEFAULT_ITC: ITCSettings = {
   amount: 4_000_000,
   receivedInYear: 2,
+  receivedInQuarter: null,
   appliedTo: 'debt',
 };
 

@@ -20,6 +20,8 @@ export type ITCApplication = 'debt' | 'reserve' | 'opex';
 export interface ITCSettings {
   amount: number;
   receivedInYear: number;
+  /** null = auto (first non-construction quarter of receivedInYear, or its last quarter if the whole year is construction); 1-4 targets a specific quarter — only meaningful when receivedInYear is within the quarterly-detail window. */
+  receivedInQuarter: number | null;
   appliedTo: ITCApplication;
 }
 

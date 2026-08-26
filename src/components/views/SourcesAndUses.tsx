@@ -57,7 +57,7 @@ export function SourcesAndUses() {
             <LineRow label="Land Contribution" value={formatCurrency(sourcesAndUses.sources.landContribution)} />
             <LineRow label="Debt Facility" value={formatCurrency(sourcesAndUses.sources.debt)} />
             <LineRow
-              label={`⚡ ITC Refund (Year ${current.itc.receivedInYear})`}
+              label={`⚡ ITC Refund (${periodLabel(current.itc.receivedInYear, current.itc.receivedInQuarter)})`}
               value={`+${formatCurrency(sourcesAndUses.sources.itc)}`}
               className="bg-h2mb-gold-bg/60 -mx-2 rounded px-2"
             />

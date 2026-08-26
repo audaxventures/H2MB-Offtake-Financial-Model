@@ -217,6 +217,7 @@ function backfillCurrentShape(raw: Scenario): Scenario {
     capexLineItems: hasCapexLineItems
       ? raw.capexLineItems.map((item) => ({ ...item, yearOverrides: item.yearOverrides ?? {} }))
       : synthesizeCapexLineItems(rawConstruction),
+    itc: { ...DEFAULT_ITC, ...raw.itc },
     plant: { ...DEFAULT_PLANT, ...raw.plant },
     revenueStreams: (raw.revenueStreams ?? []).map((s) => ({
       ...s,

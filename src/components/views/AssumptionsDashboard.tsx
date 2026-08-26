@@ -216,11 +216,12 @@ export function AssumptionsDashboard() {
               label="ITC Amount"
               value={itc.amount}
               onChange={(v) => updateITC({ amount: v })}
-              min={1_000_000}
+              min={0}
               max={6_000_000}
               step={100_000}
               formatValue={(v) => formatCurrency(v)}
               accent="gold"
+              helperText="Set to $0 to model the scenario without the ITC"
             />
             <SliderInput
               label="Received in Year"
@@ -231,6 +232,32 @@ export function AssumptionsDashboard() {
               step={1}
               accent="gold"
             />
+            <div className="grid gap-1.5">
+              <Label className="text-muted-foreground">Received in Quarter</Label>
+              <Select
+                value={itc.receivedInQuarter === null ? 'auto' : String(itc.receivedInQuarter)}
+                onValueChange={(v) =>
+                  updateITC({ receivedInQuarter: v === 'auto' ? null : Number(v) })
+                }
+                disabled={itc.receivedInYear > modelSettings.quarterlyYears}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto (first revenue quarter)</SelectItem>
+                  <SelectItem value="1">Q1</SelectItem>
+                  <SelectItem value="2">Q2</SelectItem>
+                  <SelectItem value="3">Q3</SelectItem>
+                  <SelectItem value="4">Q4</SelectItem>
+                </SelectContent>
+              </Select>
+              {itc.receivedInYear > modelSettings.quarterlyYears && (
+                <p className="text-muted-foreground text-xs">
+                  Year {itc.receivedInYear} is modeled annually — quarter selection doesn't apply.
+                </p>
+              )}
+            </div>
             <div className="grid gap-1.5">
               <Label className="text-muted-foreground">Applied To</Label>
               <Select

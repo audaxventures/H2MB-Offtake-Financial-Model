@@ -12,6 +12,7 @@ import {
   computeMaxDailyCapacityKg,
   computeMinDSCR,
   computeModelPeriods,
+  computeRevenueByYear,
   computeSourcesAndUses,
   computeTotalCapex,
   findITCPeriodIndex,
@@ -82,19 +83,31 @@ describe('period timeline', () => {
 describe('findITCPeriodIndex', () => {
   it('lands on the first non-construction period of the target year when one exists', () => {
     const periods = buildPeriods(createDefaultScenario());
-    const idx = findITCPeriodIndex(periods, 2);
+    const idx = findITCPeriodIndex(periods, 2, null);
     expect(periods[idx].label).toBe('Y2Q2');
   });
 
   it('falls back to the last period of a fully-construction year', () => {
     const periods = buildPeriods(createDefaultScenario());
-    const idx = findITCPeriodIndex(periods, 1);
+    const idx = findITCPeriodIndex(periods, 1, null);
     expect(periods[idx].label).toBe('Y1Q4');
   });
 
   it('resolves an annual period directly when the target year is beyond quarterlyYears', () => {
     const periods = buildPeriods(createDefaultScenario());
-    const idx = findITCPeriodIndex(periods, 8);
+    const idx = findITCPeriodIndex(periods, 8, null);
+    expect(periods[idx].label).toBe('Y8');
+  });
+
+  it('targets an exact quarter when receivedInQuarter is set', () => {
+    const periods = buildPeriods(createDefaultScenario());
+    const idx = findITCPeriodIndex(periods, 3, 1);
+    expect(periods[idx].label).toBe('Y3Q1');
+  });
+
+  it('falls back to year-only matching when the targeted quarter has no period (annual year)', () => {
+    const periods = buildPeriods(createDefaultScenario());
+    const idx = findITCPeriodIndex(periods, 8, 3);
     expect(periods[idx].label).toBe('Y8');
   });
 });
@@ -174,15 +187,33 @@ describe('computeModelPeriods', () => {
     expect(periods).toHaveLength(30);
   });
 
-  it('has zero revenue/cogs in every construction period, with construction opex tracked as preRevenueOpex (not a categorized line item)', () => {
+  it('has zero revenue/cogs in every construction period, with construction opex tracked as preRevenueOpex (separate from expense line items)', () => {
     for (const p of periods.filter((p) => p.isConstruction)) {
       expect(p.revenue).toBe(0);
       expect(p.cogs).toBe(0);
       expect(p.preRevenueOpex).toBeCloseTo(scenario.construction.constructionOpexPerMonth * 3, 6);
+    }
+  });
+
+  it('does not apply an expense line item before its startYear, even during construction', () => {
+    for (const p of periods.filter((p) => p.isConstruction && p.year === 1)) {
       expect(p.totalOperatingExpenses).toBe(0);
       expect(Object.keys(p.expensesByCategory)).toHaveLength(0);
       expect(p.ebitda).toBeCloseTo(-p.preRevenueOpex, 6);
     }
+  });
+
+  it('applies expense line items starting from their startYear even inside a construction period (Y2Q1)', () => {
+    const y2q1 = periods.find((p) => p.label === 'Y2Q1')!;
+    expect(y2q1.isConstruction).toBe(true);
+    const revenueByYear = computeRevenueByYear(scenario);
+    const expectedAnnual = sum(
+      scenario.expenseLineItems.map((item) =>
+        resolveLineItemAnnualAmount(item, 2, revenueByYear.get(2) ?? 0),
+      ),
+    );
+    expect(y2q1.totalOperatingExpenses).toBeCloseTo(expectedAnnual * 0.25, 6);
+    expect(y2q1.ebitda).toBeCloseTo(-y2q1.preRevenueOpex - y2q1.totalOperatingExpenses, 6);
   });
 
   it('computes revenue/COGS for a quarterly revenue period from its single stream', () => {
@@ -471,6 +502,15 @@ describe('Sources & Uses', () => {
     const su = computeSourcesAndUses(scenario);
     expect(su.surplusOrGap).toBeLessThan(0);
     expect(su.isFullyFunded).toBe(false);
+  });
+
+  it('computes cleanly with the ITC zeroed out (modeling "no ITC")', () => {
+    const scenario = createDefaultScenario();
+    scenario.itc.amount = 0;
+    const outputs = runModel(scenario);
+    expect(outputs.periods.every((p) => p.itcReceived === 0)).toBe(true);
+    expect(outputs.sourcesAndUses.sources.itc).toBe(0);
+    expect(outputs.equityIRR).not.toBeNull();
   });
 });
 

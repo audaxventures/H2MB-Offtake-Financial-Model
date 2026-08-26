@@ -113,6 +113,10 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   section('ITC Settings');
   rows.push([cell('ITC Amount'), cell(scenario.itc.amount, { ...inputStyle, ...goldFillStyle }, CURRENCY_FMT)]);
   rows.push([cell('Received in Year'), cell(scenario.itc.receivedInYear, { ...inputStyle, ...goldFillStyle }, '0')]);
+  rows.push([
+    cell('Received in Quarter'),
+    cell(scenario.itc.receivedInQuarter ?? 'Auto', { ...inputStyle, ...goldFillStyle }, scenario.itc.receivedInQuarter ? '0' : undefined),
+  ]);
   rows.push([cell('Applied To'), cell(scenario.itc.appliedTo, { ...inputStyle, ...goldFillStyle })]);
   rows.push([]);
 
