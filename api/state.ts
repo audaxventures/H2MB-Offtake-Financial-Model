@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getSql, ensureAppStateTable } from './_lib/db';
-import { requireToken, AuthError } from './_lib/auth';
+import { getSql, ensureAppStateTable } from './_lib/db.js';
+import { requireToken, AuthError } from './_lib/auth.js';
 
 interface StateRow {
   data: unknown;
