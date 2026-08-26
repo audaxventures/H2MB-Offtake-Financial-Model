@@ -15,7 +15,7 @@ interface TopNavProps {
   onToggleDarkMode: () => void;
   onOpenScenarios: () => void;
   onExportExcel: () => void;
-  onExportPDF: () => void;
+  onOpenPDFExport: () => void;
   email?: string | null;
   syncStatus?: SyncStatus;
   onSignOut?: () => void;
@@ -51,7 +51,7 @@ export function TopNav({
   onToggleDarkMode,
   onOpenScenarios,
   onExportExcel,
-  onExportPDF,
+  onOpenPDFExport,
   email,
   syncStatus,
   onSignOut,
@@ -80,9 +80,9 @@ export function TopNav({
               <FileSpreadsheet />
               Export to Excel (.xlsx)
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={onExportPDF}>
+            <DropdownMenuItem onSelect={onOpenPDFExport}>
               <FileText />
-              Export to PDF (Summary)
+              Export to PDF…
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

@@ -51,6 +51,7 @@ function synthesizeCapexLineItems(raw: LegacyConstructionCosts | undefined): Cap
       id: generateId(),
       name,
       category,
+      itcEligible: category !== 'contingency',
       startYear: 1,
       baseAnnualAmount: 0,
       escalation: { type: 'manual' },
@@ -217,7 +218,11 @@ function backfillCurrentShape(raw: Scenario): Scenario {
         rawConstruction?.workingCapitalBuffer ?? DEFAULT_CONSTRUCTION.workingCapitalBuffer,
     },
     capexLineItems: hasCapexLineItems
-      ? raw.capexLineItems.map((item) => ({ ...item, yearOverrides: item.yearOverrides ?? {} }))
+      ? raw.capexLineItems.map((item) => ({
+          ...item,
+          itcEligible: item.itcEligible ?? item.category !== 'contingency',
+          yearOverrides: item.yearOverrides ?? {},
+        }))
       : synthesizeCapexLineItems(rawConstruction),
     itc: { ...DEFAULT_ITC, ...raw.itc },
     plant: { ...DEFAULT_PLANT, ...raw.plant },

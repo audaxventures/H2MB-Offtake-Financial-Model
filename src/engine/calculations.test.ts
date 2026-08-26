@@ -9,6 +9,8 @@ import {
   computeDebtPayoffQuarter,
   computeEquityIRRFromScenario,
   computeEquityPaybackYear,
+  computeITCAmount,
+  computeITCEligibleBase,
   computeMaxDailyCapacityKg,
   computeMinDSCR,
   computeModelPeriods,
@@ -771,5 +773,117 @@ describe('runModel (full integration, default 15-year scenario)', () => {
     expect(lastPeriod.closingDebtBalance).toBe(0);
     expect(outputs.netDebtAfterITC).toBe(0);
     expect(outputs.interestSavedFromITC).toBeGreaterThan(0);
+  });
+});
+
+describe('ITC: percent-of-eligible-CapEx mode', () => {
+  it('in fixed mode, ignores percentOfEligibleCapex/eligibility tags and just returns the raw amount', () => {
+    const scenario = createDefaultScenario();
+    expect(computeITCAmount(scenario)).toBe(scenario.itc.amount);
+  });
+
+  it('computes the eligible base as the sum of itcEligible-tagged CapEx line items plus the additional amount', () => {
+    const scenario = createDefaultScenario();
+    // Defaults: hard CapEx ($8.5M Y1 + $1.5M Y2, eligible) + soft costs ($1M, eligible)
+    // + contingency ($750k, NOT eligible).
+    expect(computeITCEligibleBase(scenario)).toBeCloseTo(11_000_000, 6);
+
+    scenario.itc.additionalEligibleCostAmount = 500_000;
+    expect(computeITCEligibleBase(scenario)).toBeCloseTo(11_500_000, 6);
+  });
+
+  it('excludes a CapEx item from the eligible base once itcEligible is turned off', () => {
+    const scenario = createDefaultScenario();
+    const softCostItem = scenario.capexLineItems.find((i) => i.category === 'softCosts')!;
+    softCostItem.itcEligible = false;
+    expect(computeITCEligibleBase(scenario)).toBeCloseTo(10_000_000, 6);
+  });
+
+  it('in percent mode, computes the ITC as percentOfEligibleCapex * eligible base', () => {
+    const scenario = createDefaultScenario();
+    scenario.itc.mode = 'percentOfEligibleCapex';
+    scenario.itc.percentOfEligibleCapex = 0.3;
+    scenario.itc.additionalEligibleCostAmount = 0;
+    expect(computeITCAmount(scenario)).toBeCloseTo(0.3 * 11_000_000, 6);
+  });
+
+  it('flows the percent-mode computed amount through to the sources & uses and annual periods', () => {
+    const scenario = createDefaultScenario();
+    scenario.itc.mode = 'percentOfEligibleCapex';
+    scenario.itc.percentOfEligibleCapex = 0.25;
+    const expectedAmount = 0.25 * computeITCEligibleBase(scenario);
+
+    const su = computeSourcesAndUses(scenario);
+    expect(su.sources.itc).toBeCloseTo(expectedAmount, 6);
+
+    const outputs = runModel(scenario);
+    const totalItcReceived = sum(outputs.periods.map((p) => p.itcReceived));
+    expect(totalItcReceived).toBeCloseTo(expectedAmount, 6);
+  });
+
+  it('zeroing the ITC for a "without ITC" comparison must also force fixed mode, or percent mode ignores the zeroed amount', () => {
+    const scenario = createDefaultScenario();
+    scenario.itc.mode = 'percentOfEligibleCapex';
+    scenario.itc.percentOfEligibleCapex = 0.4;
+
+    const brokenOverride = { ...scenario.itc, amount: 0 };
+    expect(computeITCAmount({ ...scenario, itc: brokenOverride })).toBeGreaterThan(0);
+
+    const correctOverride = { ...scenario.itc, mode: 'fixed' as const, amount: 0 };
+    expect(computeITCAmount({ ...scenario, itc: correctOverride })).toBe(0);
+  });
+});
+
+describe('AnnualResult cash flow statement fields', () => {
+  const scenario = createDefaultScenario();
+  const periods = computeModelPeriods(scenario);
+  const annual = computeAnnualSummary(scenario, periods);
+
+  it('computes netIncome as EBIT minus interest expense', () => {
+    for (const a of annual) {
+      expect(a.netIncome).toBeCloseTo(a.ebit - a.interest, 6);
+    }
+  });
+
+  it('computes cashFromOperations as net income plus depreciation add-back', () => {
+    for (const a of annual) {
+      expect(a.cashFromOperations).toBeCloseTo(a.netIncome + a.depreciation, 6);
+    }
+  });
+
+  it('computes cashFromInvesting as the negative of CapEx spend for the year', () => {
+    for (const a of annual) {
+      expect(a.cashFromInvesting).toBeCloseTo(-a.capexSpend, 6);
+    }
+  });
+
+  it('includes debt draw and equity contribution only in Year 1 of cashFromFinancing', () => {
+    const y1 = annual[0];
+    const y2 = annual[1];
+    const expectedY1Financing =
+      scenario.capital.totalDebt +
+      (scenario.capital.cashEquity + scenario.capital.founderSweatEquity + scenario.capital.landContribution) -
+      y1.principal -
+      y1.extraPrincipalFromITC +
+      (scenario.itc.appliedTo === 'debt' ? 0 : y1.itcReceived);
+    expect(y1.cashFromFinancing).toBeCloseTo(expectedY1Financing, 6);
+
+    const expectedY2Financing =
+      -y2.principal - y2.extraPrincipalFromITC + (scenario.itc.appliedTo === 'debt' ? 0 : y2.itcReceived);
+    expect(y2.cashFromFinancing).toBeCloseTo(expectedY2Financing, 6);
+  });
+
+  it('sums the three activities into netChangeInCash', () => {
+    for (const a of annual) {
+      expect(a.netChangeInCash).toBeCloseTo(a.cashFromOperations + a.cashFromInvesting + a.cashFromFinancing, 6);
+    }
+  });
+
+  it('accumulates endingCashBalance as a running total of netChangeInCash across years', () => {
+    let running = 0;
+    for (const a of annual) {
+      running += a.netChangeInCash;
+      expect(a.endingCashBalance).toBeCloseTo(running, 6);
+    }
   });
 });

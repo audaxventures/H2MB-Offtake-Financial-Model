@@ -17,8 +17,28 @@ export interface ConstructionCosts {
 
 export type ITCApplication = 'debt' | 'reserve' | 'opex';
 
+/**
+ * 'fixed': amount is entered directly.
+ * 'percentOfEligibleCapex': amount is computed as percentOfEligibleCapex ×
+ * (sum of CapexLineItems tagged itcEligible, across all years, plus
+ * additionalEligibleCostAmount) — see computeITCEligibleBase/computeITCAmount.
+ */
+export type ITCMode = 'fixed' | 'percentOfEligibleCapex';
+
 export interface ITCSettings {
+  mode: ITCMode;
+  /** Used when mode === 'fixed'. */
   amount: number;
+  /** Used when mode === 'percentOfEligibleCapex'. */
+  percentOfEligibleCapex: number;
+  /**
+   * Additional dollars eligible for the ITC that aren't (and shouldn't be)
+   * entered as an actual CapEx line item — e.g. costs already captured
+   * elsewhere that would double-count if also added to CapEx. Added to the
+   * tagged-CapEx total to form the eligible base; only used when
+   * mode === 'percentOfEligibleCapex'.
+   */
+  additionalEligibleCostAmount: number;
   receivedInYear: number;
   /** null = auto (first non-construction quarter of receivedInYear, or its last quarter if the whole year is construction); 1-4 targets a specific quarter — only meaningful when receivedInYear is within the quarterly-detail window. */
   receivedInQuarter: number | null;
@@ -159,11 +179,15 @@ export const CAPEX_CATEGORY_LABELS: Record<CapexCategory, string> = {
  * via the same escalation/yearOverrides mechanism as ExpenseLineItem. Most
  * CapEx items use 'manual' escalation with explicit per-year overrides,
  * since capital spending is lumpy rather than a smooth annual run-rate.
+ * itcEligible flags whether this item counts toward the ITC-eligible CapEx
+ * base when ITCSettings.mode is 'percentOfEligibleCapex' — not every CapEx
+ * category qualifies for the credit.
  */
 export interface CapexLineItem extends EscalatedLineItem {
   id: string;
   name: string;
   category: CapexCategory;
+  itcEligible: boolean;
 }
 
 /** How a role's per-FTE salary changes year to year. ('percentOfRevenue' from EscalationType isn't offered for roles — salary isn't naturally revenue-linked.) */
@@ -281,6 +305,9 @@ export interface AnnualResult {
   depreciation: number;
   ebit: number;
   interest: number;
+  /** EBIT − Interest: the P&L bottom line (excludes principal repayment and ITC, neither of which is a P&L item). */
+  netIncome: number;
+  netIncomeMarginPct: number | null;
   principal: number;
   itcReceived: number;
   extraPrincipalFromITC: number;
@@ -290,6 +317,12 @@ export interface AnnualResult {
   netCash: number;
   cumulativeCF: number;
   closingDebtBalance: number;
+  /** Full 3-section Cash Flow Statement (indirect method), independent of the equity-IRR-focused netCash/cumulativeCF above. */
+  cashFromOperations: number;
+  cashFromInvesting: number;
+  cashFromFinancing: number;
+  netChangeInCash: number;
+  endingCashBalance: number;
 }
 
 export interface SourcesAndUses {

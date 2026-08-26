@@ -292,6 +292,27 @@ export function computeTotalCapex(scenario: Scenario): number {
   return sum(Object.values(computeCapexByCategory(scenario)));
 }
 
+/** Sum of all CapEx tagged itcEligible (across all years) plus any additionalEligibleCostAmount — the base the ITC % is applied to in 'percentOfEligibleCapex' mode. */
+export function computeITCEligibleBase(scenario: Scenario): number {
+  const revenueByYear = computeRevenueByYear(scenario);
+  let total = scenario.itc.additionalEligibleCostAmount;
+  for (const item of scenario.capexLineItems) {
+    if (!item.itcEligible) continue;
+    for (let year = 1; year <= scenario.modelSettings.totalYears; year++) {
+      total += resolveLineItemAnnualAmount(item, year, revenueByYear.get(year) ?? 0);
+    }
+  }
+  return total;
+}
+
+/** Resolves the actual ITC dollar amount from ITCSettings, regardless of mode. */
+export function computeITCAmount(scenario: Scenario): number {
+  if (scenario.itc.mode === 'percentOfEligibleCapex') {
+    return scenario.itc.percentOfEligibleCapex * computeITCEligibleBase(scenario);
+  }
+  return scenario.itc.amount;
+}
+
 /**
  * Runs the full period-by-period cash flow / debt schedule across the
  * scenario's whole model horizon (quarterly through quarterlyYears, then
@@ -304,7 +325,7 @@ export function computeModelPeriods(
 ): PeriodResult[] {
   const { capital, construction, itc, revenueStreams, expenseLineItems, capexLineItems, employeeRoles } = scenario;
   const periods = buildPeriods(scenario);
-  const itcAmount = itcOverrideAmount ?? itc.amount;
+  const itcAmount = itcOverrideAmount ?? computeITCAmount(scenario);
   const itcPeriodIndex = findITCPeriodIndex(periods, itc.receivedInYear, itc.receivedInQuarter);
 
   const amortYears = Math.max(capital.loanTenor - capital.gracePeriod, 0);
@@ -439,6 +460,7 @@ export function computeAnnualSummary(
   for (let y = 1; y <= scenario.modelSettings.totalYears; y++) years.push(y);
 
   let cumulativeCapexSpend = 0;
+  let endingCashBalance = 0;
 
   return years.map((year) => {
     const yearPeriods = periods.filter((p) => p.year === year);
@@ -474,6 +496,28 @@ export function computeAnnualSummary(
     const totalDebtService = interest + principal + extraPrincipalFromITC;
     const depreciation = year >= firstOpYear ? annualDepreciation : 0;
     const ebit = ebitda - depreciation;
+    const netIncome = ebit - interest;
+    const netIncomeMarginPct = revenue > 0 ? netIncome / revenue : null;
+
+    // Full 3-section Cash Flow Statement (indirect method). Debt/equity are
+    // modeled as fully drawn/contributed at financial close (Year 1),
+    // matching how Sources & Uses funds the project — this engine doesn't
+    // model a phased capital draw schedule separate from that.
+    const itcToCashFinancing = scenario.itc.appliedTo === 'debt' ? 0 : itcReceived;
+    const debtDrawnThisYear = year === 1 ? scenario.capital.totalDebt : 0;
+    const equityContributedThisYear =
+      year === 1
+        ? scenario.capital.cashEquity +
+          scenario.capital.founderSweatEquity +
+          scenario.capital.landContribution
+        : 0;
+    const cashFromOperations = netIncome + depreciation;
+    const cashFromInvesting = -capexSpend;
+    const cashFromFinancing =
+      debtDrawnThisYear + equityContributedThisYear - principal - extraPrincipalFromITC + itcToCashFinancing;
+    const netChangeInCash = cashFromOperations + cashFromInvesting + cashFromFinancing;
+    endingCashBalance += netChangeInCash;
+
     const netCash = sum(yearPeriods.map((p) => p.netCash));
     const closingDebtBalance =
       yearPeriods.length > 0
@@ -506,6 +550,8 @@ export function computeAnnualSummary(
       depreciation,
       ebit,
       interest,
+      netIncome,
+      netIncomeMarginPct,
       principal,
       itcReceived,
       extraPrincipalFromITC,
@@ -515,6 +561,11 @@ export function computeAnnualSummary(
       netCash,
       cumulativeCF,
       closingDebtBalance,
+      cashFromOperations,
+      cashFromInvesting,
+      cashFromFinancing,
+      netChangeInCash,
+      endingCashBalance,
     };
   });
 }
@@ -617,13 +668,13 @@ export function computeMinDSCR(
 }
 
 export function computeSourcesAndUses(scenario: Scenario): SourcesAndUses {
-  const { capital, construction, itc } = scenario;
+  const { capital, construction } = scenario;
   const sources = {
     cashEquity: capital.cashEquity,
     founderSweatEquity: capital.founderSweatEquity,
     landContribution: capital.landContribution,
     debt: capital.totalDebt,
-    itc: itc.amount,
+    itc: computeITCAmount(scenario),
     total: 0,
   };
   sources.total =
@@ -712,7 +763,7 @@ export function computeDebtPayoffQuarter(
   itcOverrideAmount?: number,
 ): { year: number; quarter: number } | null {
   const { capital, construction, itc } = scenario;
-  const itcAmount = itcOverrideAmount ?? itc.amount;
+  const itcAmount = itcOverrideAmount ?? computeITCAmount(scenario);
   const constructionQuarters = Math.round(construction.constructionDurationMonths / 3);
   const itcQuarterIndex = (() => {
     const yearStartIndex = (itc.receivedInYear - 1) * 4;

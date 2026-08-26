@@ -5,6 +5,8 @@ import { AlertBanner } from '@/components/shared/AlertBanner';
 import {
   computeDebtPayoffQuarter,
   computeEquityIRRFromScenario,
+  computeITCAmount,
+  computeITCEligibleBase,
   periodLabel,
   runModel,
 } from '@/engine/calculations';
@@ -18,7 +20,7 @@ export function SourcesAndUses() {
   const { sourcesAndUses } = outputs;
 
   const noItcOutputs = useMemo(() => {
-    const noItcScenario = { ...current, itc: { ...current.itc, amount: 0 } };
+    const noItcScenario = { ...current, itc: { ...current.itc, mode: 'fixed' as const, amount: 0 } };
     return runModel(noItcScenario);
   }, [current]);
 
@@ -26,8 +28,9 @@ export function SourcesAndUses() {
   const payoffWithoutITC = useMemo(() => computeDebtPayoffQuarter(current, 0), [current]);
   const noItcIRR = computeEquityIRRFromScenario(current, noItcOutputs.annual);
 
-  const eligibleCapex = outputs.sourcesAndUses.uses.hardCapex + outputs.sourcesAndUses.uses.softCosts;
-  const itcPctOfCapex = eligibleCapex > 0 ? current.itc.amount / eligibleCapex : 0;
+  const eligibleCapex = useMemo(() => computeITCEligibleBase(current), [current]);
+  const itcAmount = useMemo(() => computeITCAmount(current), [current]);
+  const itcPctOfCapex = eligibleCapex > 0 ? itcAmount / eligibleCapex : 0;
 
   const savingsChartData = [
     { label: 'Without ITC', value: outputs.totalInterestPaidNoITC },
@@ -103,8 +106,8 @@ export function SourcesAndUses() {
             <CardTitle className="text-h2mb-gold">ITC Deep Dive</CardTitle>
           </CardHeader>
           <CardContent>
-            <LineRow label="ITC Amount" value={formatCurrency(current.itc.amount)} />
-            <LineRow label="Eligible CapEx (Hard + Soft)" value={formatCurrency(eligibleCapex)} />
+            <LineRow label="ITC Amount" value={formatCurrency(itcAmount)} />
+            <LineRow label="ITC-Eligible CapEx (tagged)" value={formatCurrency(eligibleCapex)} />
             <LineRow label="ITC as % of Eligible CapEx" value={formatPercent(itcPctOfCapex, 1)} />
             <LineRow
               label="Application Method"

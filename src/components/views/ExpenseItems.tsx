@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SliderInput } from '@/components/shared/SliderInput';
 import { DataTable, type DataTableColumn } from '@/components/shared/DataTable';
@@ -689,6 +690,7 @@ function CapexTab() {
                   <p className="font-medium">{i.name || 'Untitled CapEx Item'}</p>
                   <p className="text-muted-foreground text-xs">
                     {CAPEX_CATEGORY_LABELS[i.category]} · {ESCALATION_LABELS[i.escalation.type]}
+                    {i.itcEligible && ' · ITC Eligible'}
                   </p>
                 </div>
                 <span className="text-muted-foreground tabular-nums">
@@ -751,6 +753,20 @@ function CapexTab() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+                <div>
+                  <Label className="text-sm font-medium">ITC Eligible</Label>
+                  <p className="text-muted-foreground text-xs">
+                    Counts toward the ITC-eligible CapEx base when the ITC is set to "% of Eligible
+                    CapEx" on the Assumptions Dashboard.
+                  </p>
+                </div>
+                <Switch
+                  checked={item.itcEligible}
+                  onCheckedChange={(checked) => updateCapexLineItem(item.id, { itcEligible: checked })}
+                />
               </div>
 
               <div className="grid gap-1.5">

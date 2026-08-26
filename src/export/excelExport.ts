@@ -1,7 +1,8 @@
 import XLSX from 'xlsx-js-style';
-import { DSCR_DANGER, DSCR_TARGET, computeCapexByCategory } from '@/engine/calculations';
+import { DSCR_DANGER, DSCR_TARGET, computeCapexByCategory, computeITCAmount, computeITCEligibleBase } from '@/engine/calculations';
 import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
-import type { ExpenseCategory, ModelOutputs, Scenario } from '@/engine/types';
+import type { ModelOutputs, Scenario } from '@/engine/types';
+import { usedCapexCategories, usedExpenseCategories } from '@/lib/statementRows';
 
 const NAVY = '1F4E79';
 const WHITE = 'FFFFFF';
@@ -111,7 +112,13 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   rows.push([]);
 
   section('ITC Settings');
-  rows.push([cell('ITC Amount'), cell(scenario.itc.amount, { ...inputStyle, ...goldFillStyle }, CURRENCY_FMT)]);
+  rows.push([cell('Calculation Method'), cell(scenario.itc.mode === 'percentOfEligibleCapex' ? '% of Eligible CapEx' : 'Fixed Dollar Amount')]);
+  if (scenario.itc.mode === 'percentOfEligibleCapex') {
+    rows.push([cell('% of Eligible CapEx'), cell(scenario.itc.percentOfEligibleCapex, { ...inputStyle, ...goldFillStyle }, PERCENT_FMT)]);
+    rows.push([cell('Additional Eligible Cost'), cell(scenario.itc.additionalEligibleCostAmount, { ...inputStyle, ...goldFillStyle }, CURRENCY_FMT)]);
+    rows.push([cell('ITC-Eligible CapEx Tagged'), cell(computeITCEligibleBase(scenario), undefined, CURRENCY_FMT)]);
+  }
+  rows.push([cell('ITC Amount (computed)'), cell(computeITCAmount(scenario), { ...inputStyle, ...goldFillStyle }, CURRENCY_FMT)]);
   rows.push([cell('Received in Year'), cell(scenario.itc.receivedInYear, { ...inputStyle, ...goldFillStyle }, '0')]);
   rows.push([
     cell('Received in Quarter'),
@@ -228,7 +235,7 @@ function buildPeriodSheet(outputs: ModelOutputs): XLSX.WorkSheet {
   return buildSheet(rows, [8, 13, 9, 13, 13, 14, 13, 12, 12, 12, 13, 13, 14, 8]);
 }
 
-function buildAnnualSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkSheet {
+function buildProfitAndLossSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkSheet {
   const rows: XLSX.CellObject[][] = [];
   const yearHeaders = ['Line Item', ...outputs.annual.map((a) => `Year ${a.year}`)];
   rows.push(yearHeaders.map((h) => cell(h, headerStyle)));
@@ -244,37 +251,15 @@ function buildAnnualSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkS
       ...values.map((v) => cell(v ?? '', style, numFmt)),
     ]);
 
-  // Scan both the line items AND the computed per-period breakdown — a
-  // category can be populated purely via Employee Roles (payroll) with no
-  // matching ExpenseLineItem, and would otherwise be silently dropped here.
-  const usedCategories = Array.from(
-    new Set([
-      ...scenario.expenseLineItems.filter((i) => i.category !== 'cogs').map((i) => i.category),
-      ...outputs.annual.flatMap(
-        (a) => Object.keys(a.expensesByCategory).filter((c) => c !== 'cogs') as ExpenseCategory[],
-      ),
-    ]),
-  );
-  const usedCapexCategories = Array.from(new Set(scenario.capexLineItems.map((i) => i.category)));
+  const categories = usedExpenseCategories(scenario, outputs.annual);
 
   line('Hydrogen Sales Revenue', outputs.annual.map((a) => a.revenue));
   line('Cost of Goods Sold', outputs.annual.map((a) => -a.cogs));
   line('Gross Profit', outputs.annual.map((a) => a.grossProfit), CURRENCY_FMT, boldStyle);
   line('Gross Margin %', outputs.annual.map((a) => a.grossMarginPct), PERCENT_FMT);
 
-  for (const category of usedCapexCategories) {
-    line(
-      CAPEX_CATEGORY_LABELS[category],
-      outputs.annual.map((a) => -(a.capexByCategory[category] ?? 0)),
-    );
-  }
-  if (usedCapexCategories.length > 0) {
-    line('Total CapEx Spend', outputs.annual.map((a) => -a.capexSpend), CURRENCY_FMT, boldStyle);
-    line('Cumulative CapEx Spent', outputs.annual.map((a) => -a.cumulativeCapexSpend));
-  }
-
   line('Pre-Revenue / Construction OpEx', outputs.annual.map((a) => -a.preRevenueOpex));
-  for (const category of usedCategories as ExpenseCategory[]) {
+  for (const category of categories) {
     line(
       EXPENSE_CATEGORY_LABELS[category],
       outputs.annual.map((a) => -(a.expensesByCategory[category] ?? 0)),
@@ -291,19 +276,73 @@ function buildAnnualSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkS
   line('D&A (20yr SL, 5% salvage)', outputs.annual.map((a) => -a.depreciation));
   line('EBIT', outputs.annual.map((a) => a.ebit), CURRENCY_FMT, boldStyle);
   line('Interest Expense', outputs.annual.map((a) => -a.interest));
+  line('Net Profit (Loss)', outputs.annual.map((a) => a.netIncome), CURRENCY_FMT, boldStyle);
+  line('Net Margin %', outputs.annual.map((a) => a.netIncomeMarginPct), PERCENT_FMT);
+
+  const colWidths = [30, ...outputs.annual.map(() => 14)];
+  return buildSheet(rows, colWidths);
+}
+
+function buildCashFlowSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkSheet {
+  const rows: XLSX.CellObject[][] = [];
+  const yearHeaders = ['Line Item', ...outputs.annual.map((a) => `Year ${a.year}`)];
+  rows.push(yearHeaders.map((h) => cell(h, headerStyle)));
+
+  const line = (
+    label: string,
+    values: (number | null)[],
+    numFmt = CURRENCY_FMT,
+    style?: CellStyle,
+  ) =>
+    rows.push([
+      cell(label, style),
+      ...values.map((v) => cell(v ?? '', style, numFmt)),
+    ]);
+
+  const capexCategories = usedCapexCategories(scenario, outputs.annual);
+
+  for (const category of capexCategories) {
+    line(
+      CAPEX_CATEGORY_LABELS[category],
+      outputs.annual.map((a) => -(a.capexByCategory[category] ?? 0)),
+    );
+  }
+  line('Cash from Investing Activities', outputs.annual.map((a) => a.cashFromInvesting), CURRENCY_FMT, boldStyle);
+
+  line('Interest Expense', outputs.annual.map((a) => -a.interest));
   line('Principal Repayment', outputs.annual.map((a) => -a.principal));
   line('ITC Received', outputs.annual.map((a) => a.itcReceived));
   line('Extra Principal (ITC)', outputs.annual.map((a) => -a.extraPrincipalFromITC));
   line('Total Debt Service', outputs.annual.map((a) => a.totalDebtService), CURRENCY_FMT, boldStyle);
-
   rows.push([
     cell('DSCR (annual)'),
     ...outputs.annual.map((a) => cell(a.dscr ?? '', dscrStyle(a.dscr), DSCR_FMT)),
   ]);
   line('DSCR vs 1.25x Target (headroom)', outputs.annual.map((a) => a.dscrHeadroom), DSCR_FMT);
-  line('Net Cash', outputs.annual.map((a) => a.netCash), CURRENCY_FMT, boldStyle);
-  line('Cumulative Cash Flow', outputs.annual.map((a) => a.cumulativeCF));
   line('Closing Debt Balance', outputs.annual.map((a) => a.closingDebtBalance));
+
+  line('Net Income', outputs.annual.map((a) => a.netIncome));
+  line('+ Depreciation & Amortization', outputs.annual.map((a) => a.depreciation));
+  line('Cash from Operating Activities', outputs.annual.map((a) => a.cashFromOperations), CURRENCY_FMT, boldStyle);
+  line('Cash from Investing Activities', outputs.annual.map((a) => a.cashFromInvesting));
+  line('Debt Drawn (Financial Close)', outputs.annual.map((a) => (a.year === 1 ? scenario.capital.totalDebt : 0)));
+  line(
+    'Equity Contributed (Financial Close)',
+    outputs.annual.map((a) =>
+      a.year === 1
+        ? scenario.capital.cashEquity + scenario.capital.founderSweatEquity + scenario.capital.landContribution
+        : 0,
+    ),
+  );
+  line('− Principal Repayment', outputs.annual.map((a) => -a.principal));
+  line('− Extra Principal (ITC)', outputs.annual.map((a) => -a.extraPrincipalFromITC));
+  line('ITC Received (Cash)', outputs.annual.map((a) => (scenario.itc.appliedTo === 'debt' ? 0 : a.itcReceived)));
+  line('Cash from Financing Activities', outputs.annual.map((a) => a.cashFromFinancing), CURRENCY_FMT, boldStyle);
+  line('Net Change in Cash', outputs.annual.map((a) => a.netChangeInCash), CURRENCY_FMT, boldStyle);
+  line('Ending Cash Balance', outputs.annual.map((a) => a.endingCashBalance), CURRENCY_FMT, boldStyle);
+
+  line('Net Cash (EBITDA − Debt Service +/− ITC)', outputs.annual.map((a) => a.netCash), CURRENCY_FMT, boldStyle);
+  line('Cumulative Cash Flow', outputs.annual.map((a) => a.cumulativeCF));
 
   const colWidths = [30, ...outputs.annual.map(() => 14)];
   return buildSheet(rows, colWidths);
@@ -344,7 +383,8 @@ export function exportToExcel(scenario: Scenario, outputs: ModelOutputs): void {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, buildAssumptionsSheet(scenario), 'Assumptions');
   XLSX.utils.book_append_sheet(workbook, buildPeriodSheet(outputs), 'Period Detail');
-  XLSX.utils.book_append_sheet(workbook, buildAnnualSheet(scenario, outputs), 'Annual Summary');
+  XLSX.utils.book_append_sheet(workbook, buildProfitAndLossSheet(scenario, outputs), 'Profit & Loss');
+  XLSX.utils.book_append_sheet(workbook, buildCashFlowSheet(scenario, outputs), 'Cash Flow Statement');
   XLSX.utils.book_append_sheet(workbook, buildSourcesUsesSheet(outputs), 'Sources & Uses');
 
   const fileName = `H2MB_Finance_Model_${scenario.name.replace(/\s+/g, '_')}.xlsx`;

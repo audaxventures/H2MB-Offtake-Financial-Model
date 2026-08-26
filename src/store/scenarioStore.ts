@@ -124,6 +124,7 @@ function createBlankCapexLineItem(): CapexLineItem {
     id: generateId(),
     name: 'New CapEx Item',
     category: 'hardCapex',
+    itcEligible: true,
     startYear: 1,
     baseAnnualAmount: 0,
     escalation: { type: 'manual' },

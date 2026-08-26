@@ -3,11 +3,12 @@ import {
   LayoutDashboard,
   Receipt,
   TrendingUp,
+  Wallet,
   Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ViewId = 'assumptions' | 'revenue' | 'expenses' | 'annual' | 'sources';
+export type ViewId = 'assumptions' | 'revenue' | 'expenses' | 'pnl' | 'cashflow' | 'sources';
 
 interface NavItem {
   id: ViewId;
@@ -19,7 +20,8 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'assumptions', label: 'Assumptions Dashboard', icon: LayoutDashboard },
   { id: 'revenue', label: 'Revenue Streams', icon: TrendingUp },
   { id: 'expenses', label: 'Expense Items', icon: Receipt },
-  { id: 'annual', label: 'Annual Summary', icon: BarChart3 },
+  { id: 'pnl', label: 'Profit & Loss', icon: BarChart3 },
+  { id: 'cashflow', label: 'Cash Flow Statement', icon: Wallet },
   { id: 'sources', label: 'Sources & Uses / ITC', icon: Zap },
 ];
 

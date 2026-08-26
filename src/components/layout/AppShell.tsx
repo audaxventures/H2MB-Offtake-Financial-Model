@@ -8,7 +8,8 @@ const VIEW_TITLES: Record<ViewId, string> = {
   assumptions: 'Assumptions Dashboard',
   revenue: 'Revenue Streams',
   expenses: 'Expense Items',
-  annual: 'Annual Summary',
+  pnl: 'Profit & Loss Statement',
+  cashflow: 'Cash Flow Statement',
   sources: 'Sources & Uses / ITC Analysis',
 };
 
@@ -17,7 +18,7 @@ interface AppShellProps {
   onNavigate: (view: ViewId) => void;
   onOpenScenarios: () => void;
   onExportExcel: () => void;
-  onExportPDF: () => void;
+  onOpenPDFExport: () => void;
   bannerSlot?: ReactNode;
   children: ReactNode;
   email?: string | null;
@@ -30,7 +31,7 @@ export function AppShell({
   onNavigate,
   onOpenScenarios,
   onExportExcel,
-  onExportPDF,
+  onOpenPDFExport,
   bannerSlot,
   children,
   email,
@@ -54,7 +55,7 @@ export function AppShell({
           onToggleDarkMode={toggleDarkMode}
           onOpenScenarios={onOpenScenarios}
           onExportExcel={onExportExcel}
-          onExportPDF={onExportPDF}
+          onOpenPDFExport={onOpenPDFExport}
           email={email}
           syncStatus={syncStatus}
           onSignOut={onSignOut}

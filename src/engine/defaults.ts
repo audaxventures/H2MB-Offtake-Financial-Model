@@ -31,7 +31,10 @@ export const DEFAULT_CONSTRUCTION: ConstructionCosts = {
 };
 
 export const DEFAULT_ITC: ITCSettings = {
+  mode: 'fixed',
   amount: 4_000_000,
+  percentOfEligibleCapex: 0.4,
+  additionalEligibleCostAmount: 0,
   receivedInYear: 2,
   receivedInQuarter: null,
   appliedTo: 'debt',
@@ -197,6 +200,7 @@ export function createDefaultCapexLineItems(): CapexLineItem[] {
       id: generateId(),
       name: 'Electrolyzer & Balance of Plant',
       category: 'hardCapex',
+      itcEligible: true,
       startYear: 1,
       baseAnnualAmount: 0,
       escalation: { type: 'manual' },
@@ -206,6 +210,7 @@ export function createDefaultCapexLineItems(): CapexLineItem[] {
       id: generateId(),
       name: 'Engineering, Permitting & Soft Costs',
       category: 'softCosts',
+      itcEligible: true,
       startYear: 1,
       baseAnnualAmount: 0,
       escalation: { type: 'manual' },
@@ -215,6 +220,7 @@ export function createDefaultCapexLineItems(): CapexLineItem[] {
       id: generateId(),
       name: 'Construction Contingency',
       category: 'contingency',
+      itcEligible: false,
       startYear: 1,
       baseAnnualAmount: 0,
       escalation: { type: 'manual' },

@@ -16,6 +16,8 @@ import { DSCRBadge } from '@/components/shared/Badge';
 import {
   computeBreakEvenPricePerKg,
   computeDebtPayoffQuarter,
+  computeITCAmount,
+  computeITCEligibleBase,
   computeMaxDailyCapacityKg,
   periodLabel,
 } from '@/engine/calculations';
@@ -25,7 +27,7 @@ import {
   formatPercent,
 } from '@/engine/formatters';
 import { useScenarioStore } from '@/store/scenarioStore';
-import type { ITCApplication } from '@/engine/types';
+import type { ITCApplication, ITCMode } from '@/engine/types';
 
 export function AssumptionsDashboard() {
   const current = useScenarioStore((s) => s.current);
@@ -55,6 +57,8 @@ export function AssumptionsDashboard() {
 
   const payoffWithITC = useMemo(() => computeDebtPayoffQuarter(current), [current]);
   const payoffWithoutITC = useMemo(() => computeDebtPayoffQuarter(current, 0), [current]);
+  const eligibleCapexBase = useMemo(() => computeITCEligibleBase(current), [current]);
+  const computedITCAmount = useMemo(() => computeITCAmount(current), [current]);
 
   const maxCapacityKg = computeMaxDailyCapacityKg(current);
   const breakEvenPrice = computeBreakEvenPricePerKg(outputs.periods);
@@ -212,17 +216,64 @@ export function AssumptionsDashboard() {
             <CardTitle className="text-h2mb-gold">ITC Settings</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-4">
-            <SliderInput
-              label="ITC Amount"
-              value={itc.amount}
-              onChange={(v) => updateITC({ amount: v })}
-              min={0}
-              max={6_000_000}
-              step={100_000}
-              formatValue={(v) => formatCurrency(v)}
-              accent="gold"
-              helperText="Set to $0 to model the scenario without the ITC"
-            />
+            <div className="grid gap-1.5">
+              <Label className="text-muted-foreground">ITC Calculation Method</Label>
+              <Select
+                value={itc.mode}
+                onValueChange={(v) => updateITC({ mode: v as ITCMode })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="fixed">Fixed Dollar Amount</SelectItem>
+                  <SelectItem value="percentOfEligibleCapex">% of Eligible CapEx</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {itc.mode === 'fixed' ? (
+              <SliderInput
+                label="ITC Amount"
+                value={itc.amount}
+                onChange={(v) => updateITC({ amount: v })}
+                min={0}
+                max={6_000_000}
+                step={100_000}
+                formatValue={(v) => formatCurrency(v)}
+                accent="gold"
+                helperText="Set to $0 to model the scenario without the ITC"
+              />
+            ) : (
+              <>
+                <SliderInput
+                  label="% of Eligible CapEx"
+                  value={itc.percentOfEligibleCapex}
+                  onChange={(v) => updateITC({ percentOfEligibleCapex: v })}
+                  min={0}
+                  max={0.5}
+                  step={0.01}
+                  formatValue={(v) => formatPercent(v, 0)}
+                  accent="gold"
+                />
+                <SliderInput
+                  label="Additional Eligible Cost ($)"
+                  value={itc.additionalEligibleCostAmount}
+                  onChange={(v) => updateITC({ additionalEligibleCostAmount: v })}
+                  min={0}
+                  max={5_000_000}
+                  step={50_000}
+                  formatValue={(v) => formatCurrency(v)}
+                  accent="gold"
+                  helperText="Eligible costs not entered as an actual CapEx line item, to avoid double-counting"
+                />
+                <div className="grid grid-cols-1 gap-1.5 rounded-lg bg-white/60 p-3 text-sm dark:bg-black/20">
+                  <StatRow label="ITC-Eligible CapEx Tagged" value={formatCurrency(eligibleCapexBase)} />
+                  <StatRow label="Computed ITC Amount" value={formatCurrency(computedITCAmount)} />
+                </div>
+              </>
+            )}
+
             <SliderInput
               label="Received in Year"
               value={itc.receivedInYear}
