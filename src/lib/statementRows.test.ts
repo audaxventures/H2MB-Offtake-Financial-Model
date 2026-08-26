@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { filterRowsForDetail } from './statementRows';
+import { buildProfitAndLossRows, filterRowsForDetail } from './statementRows';
 import type { RowSpec } from '@/components/shared/StatementTable';
+import { createDefaultScenario } from '@/engine/defaults';
+import { runModel } from '@/engine/calculations';
+import { formatCurrency } from '@/engine/formatters';
 
 const rows: RowSpec[] = [
   { key: 'revenue', section: 'Revenue', label: 'Revenue', render: () => '', summary: true },
@@ -43,5 +46,49 @@ describe('filterRowsForDetail', () => {
     const result = filterRowsForDetail(consecutiveSummaryRows, 'summary');
     expect(result[0].section).toBe('Section 1');
     expect(result[1].section).toBeUndefined();
+  });
+});
+
+describe('buildProfitAndLossRows', () => {
+  it('breaks revenue and expenses out line by line rather than by category', () => {
+    const scenario = createDefaultScenario();
+    const outputs = runModel(scenario);
+    const rows = buildProfitAndLossRows(scenario);
+    const a = outputs.annual[1]; // Year 2: first year with revenue
+
+    // One row per named revenue stream (not a single combined category row).
+    for (const stream of scenario.revenueStreams) {
+      const row = rows.find((r) => r.key === `revenue-${stream.id}`);
+      expect(row).toBeDefined();
+      expect(row!.label).toBe(stream.name);
+    }
+
+    // One row per named expense line item (excluding cogs-category items, which live in the COGS section).
+    for (const item of scenario.expenseLineItems.filter((i) => i.category !== 'cogs')) {
+      const row = rows.find((r) => r.key === `expense-${item.id}`);
+      expect(row).toBeDefined();
+      expect(row!.label).toBe(item.name);
+    }
+
+    // Individual revenue-stream rows sum to the Total Revenue row.
+    const totalRevenueRow = rows.find((r) => r.key === 'totalRevenue')!;
+    const streamRowsSum = scenario.revenueStreams.reduce(
+      (acc, stream) => acc + (a.streamBreakdown.find((s) => s.streamId === stream.id)?.revenue ?? 0),
+      0,
+    );
+    expect(totalRevenueRow.render(a)).toBe(formatCurrency(streamRowsSum));
+    expect(totalRevenueRow.render(a)).toBe(formatCurrency(a.revenue));
+  });
+
+  it('combines Employee Roles payroll into a single row rather than one row per role', () => {
+    const scenario = createDefaultScenario();
+    scenario.employeeRoles = [
+      { id: 'r1', title: 'Plant Manager', baseSalaryYear: 2, baseAnnualSalary: 100_000, salaryEscalation: { type: 'flat' }, salaryYearOverrides: {}, benefitsPct: 0.2, headcountByYear: { 2: 1 } },
+      { id: 'r2', title: 'Operator', baseSalaryYear: 2, baseAnnualSalary: 70_000, salaryEscalation: { type: 'flat' }, salaryYearOverrides: {}, benefitsPct: 0.2, headcountByYear: { 2: 2 } },
+    ];
+    const rows = buildProfitAndLossRows(scenario);
+    expect(rows.filter((r) => r.key === 'payrollRoles')).toHaveLength(1);
+    expect(rows.some((r) => r.label === 'Plant Manager')).toBe(false);
+    expect(rows.some((r) => r.label === 'Operator')).toBe(false);
   });
 });

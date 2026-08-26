@@ -17,7 +17,8 @@ import { SliderInput } from '@/components/shared/SliderInput';
 import { DataTable, type DataTableColumn } from '@/components/shared/DataTable';
 import { DSCRBadge } from '@/components/shared/Badge';
 import { cn } from '@/lib/utils';
-import type { AnnualResult, OfftakeMode, PeriodResult } from '@/engine/types';
+import { REVENUE_PRODUCT_LABELS } from '@/engine/types';
+import type { AnnualResult, OfftakeMode, PeriodResult, RevenueProduct } from '@/engine/types';
 import { formatCurrency, formatCurrencyCompact } from '@/engine/formatters';
 import { useScenarioStore } from '@/store/scenarioStore';
 import { useModelOutputs } from '@/store/useModelOutputs';
@@ -89,6 +90,26 @@ export function RevenueStreams() {
                       />
                     </div>
                     <div className="grid gap-1.5">
+                      <Label className="text-muted-foreground">Product</Label>
+                      <Select
+                        value={stream.product}
+                        onValueChange={(v) =>
+                          updateRevenueStream(stream.id, { product: v as RevenueProduct })
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(REVENUE_PRODUCT_LABELS).map(([value, label]) => (
+                            <SelectItem key={value} value={value}>
+                              {label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-1.5">
                       <Label className="text-muted-foreground">Offtake Type</Label>
                       <Select
                         value={stream.offtakeMode}
@@ -117,7 +138,13 @@ export function RevenueStreams() {
                       />
                     )}
                     <SliderInput
-                      label="H2 Production Cost / kg"
+                      label={
+                        stream.product === 'hydrogen'
+                          ? 'H2 Production Cost / kg'
+                          : stream.product === 'oxygen'
+                            ? 'O2 Production Cost / kg'
+                            : 'Production Cost / kg'
+                      }
                       value={stream.h2ProductionCostPerKg}
                       onChange={(v) =>
                         updateRevenueStream(stream.id, { h2ProductionCostPerKg: v })

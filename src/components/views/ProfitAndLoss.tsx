@@ -11,7 +11,7 @@ export function ProfitAndLoss() {
   const outputs = useModelOutputs();
   const { annual } = outputs;
 
-  const rows = useMemo(() => buildProfitAndLossRows(current, annual), [current, annual]);
+  const rows = useMemo(() => buildProfitAndLossRows(current), [current]);
 
   return (
     <div className="grid gap-6">

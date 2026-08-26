@@ -4,6 +4,7 @@ import {
   buildPeriods,
   calculateDSRAmount,
   computeAnnualSummary,
+  computeBaseCapexBeforeContingency,
   computeBreakEvenPricePerKg,
   computeCapexByCategory,
   computeDebtPayoffQuarter,
@@ -33,7 +34,7 @@ import {
   validateScenario,
 } from './calculations';
 import { createDefaultScenario } from './defaults';
-import type { EmployeeRole, ExpenseLineItem, RevenueStream, Scenario } from './types';
+import type { EmployeeRole, ExpenseLineItem, PeriodResult, RevenueStream, Scenario } from './types';
 
 describe('period timeline', () => {
   it('generates 4 quarters/year for quarterlyYears, then 1 annual period/year through totalYears', () => {
@@ -121,6 +122,7 @@ describe('streamPeriodDailyKg', () => {
   const baseStream: RevenueStream = {
     id: 's1',
     name: 'Test Stream',
+    product: 'hydrogen',
     offtakeMode: 'trucks',
     kgPerTruckFill: 80,
     h2ProductionCostPerKg: 2.41,
@@ -346,6 +348,7 @@ describe('multi-stream revenue', () => {
     const secondStream: RevenueStream = {
       id: 'stream-2',
       name: 'Datacentre Direct Supply',
+      product: 'hydrogen',
       offtakeMode: 'direct',
       kgPerTruckFill: 80,
       h2ProductionCostPerKg: 1.9,
@@ -376,6 +379,44 @@ describe('multi-stream revenue', () => {
     expect(secondary.revenue).toBeCloseTo(200 * 15 * 90, 6);
     expect(y4.revenue).toBeCloseTo(primary.revenue + secondary.revenue, 6);
     expect(y4.cogs).toBeCloseTo(primary.cogs + secondary.cogs, 6);
+  });
+
+  it('aggregates AnnualResult.streamBreakdown per stream, reconciling to the year\'s total revenue/cogs', () => {
+    const scenario = createDefaultScenario();
+    const secondStream: RevenueStream = {
+      id: 'stream-2',
+      name: 'Datacentre Direct Supply',
+      product: 'hydrogen',
+      offtakeMode: 'direct',
+      kgPerTruckFill: 80,
+      h2ProductionCostPerKg: 1.9,
+      startYear: 4,
+      periods: buildPeriods(scenario)
+        .filter((p) => !p.isConstruction)
+        .map((p) => ({
+          year: p.year,
+          quarter: p.quarter,
+          trucksPerDay: 0,
+          dailyQuantityKg: 200,
+          operatingDays: p.quarter === null ? 360 : 90,
+          pricePerKg: 15,
+        })),
+    };
+    scenario.revenueStreams.push(secondStream);
+
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
+
+    const y3 = annual.find((a) => a.year === 3)!;
+    expect(y3.streamBreakdown.find((s) => s.streamId === 'stream-2')?.revenue).toBe(0);
+
+    const y4 = annual.find((a) => a.year === 4)!;
+    expect(y4.streamBreakdown).toHaveLength(2);
+    const primaryEntry = y4.streamBreakdown.find((s) => s.streamId !== 'stream-2')!;
+    const secondaryEntry = y4.streamBreakdown.find((s) => s.streamId === 'stream-2')!;
+    expect(secondaryEntry.streamName).toBe('Datacentre Direct Supply');
+    expect(primaryEntry.revenue + secondaryEntry.revenue).toBeCloseTo(y4.revenue, 6);
+    expect(primaryEntry.cogs + secondaryEntry.cogs).toBeCloseTo(y4.cogs, 6);
   });
 });
 
@@ -529,6 +570,12 @@ describe('CapEx line items (phased construction spending)', () => {
     expect(computeTotalCapex(scenario)).toBeCloseTo(11_750_000, 6);
   });
 
+  it('computes Base CapEx Before Contingency as Total Project CapEx minus the contingency category', () => {
+    const scenario = createDefaultScenario();
+    expect(computeBaseCapexBeforeContingency(scenario)).toBeCloseTo(11_000_000, 6);
+    expect(computeBaseCapexBeforeContingency(scenario) + 750_000).toBeCloseTo(computeTotalCapex(scenario), 6);
+  });
+
   it('spreads a CapEx item across the years given in yearOverrides, prorated by period within each year', () => {
     const scenario = createDefaultScenario();
     const periods = computeModelPeriods(scenario);
@@ -586,6 +633,15 @@ describe('Employee Roles (headcount-based payroll)', () => {
   it('treats a year with no headcount entry as zero cost', () => {
     expect(computeRoleAnnualCost(role, 1)).toBe(0);
     expect(computeRoleAnnualCost(role, 10)).toBe(0);
+  });
+
+  it('supports fractional (part-time) headcount and fractional benefits %', () => {
+    const partTimeRole: EmployeeRole = {
+      ...role,
+      benefitsPct: 0.125,
+      headcountByYear: { 2: 0.5 },
+    };
+    expect(computeRoleAnnualCost(partTimeRole, 2)).toBeCloseTo(0.5 * 100_000 * 1.125, 6);
   });
 
   it('sums fully-loaded cost across all roles for a given year', () => {
@@ -695,6 +751,23 @@ describe('production helpers', () => {
     const periods = computeModelPeriods(scenario);
     const breakEven = computeBreakEvenPricePerKg(periods);
     expect(breakEven).toBeGreaterThan(scenario.revenueStreams[0].h2ProductionCostPerKg);
+  });
+
+  it('excludes non-hydrogen streams (e.g. byproduct oxygen) from the break-even $/kg denominator', () => {
+    const period = {
+      isConstruction: false,
+      cogs: 1000,
+      totalOperatingExpenses: 4000,
+      streamBreakdown: [
+        { streamId: 'h2', streamName: 'H2', product: 'hydrogen', revenue: 0, cogs: 0, dailyQuantityKg: 100, operatingDays: 10, pricePerKg: 0 },
+        { streamId: 'o2', streamName: 'O2', product: 'oxygen', revenue: 0, cogs: 0, dailyQuantityKg: 10_000, operatingDays: 10, pricePerKg: 0 },
+      ],
+    } as PeriodResult;
+
+    // Only the 100kg/day × 10 days of hydrogen counts toward the denominator —
+    // oxygen's much larger 10,000kg/day volume must not dilute the figure.
+    const breakEven = computeBreakEvenPricePerKg([period]);
+    expect(breakEven).toBeCloseTo((1000 + 4000) / (100 * 10), 6);
   });
 });
 

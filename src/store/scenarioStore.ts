@@ -99,6 +99,7 @@ function createBlankRevenueStream(modelSettings: ModelSettings, index: number): 
   return {
     id: generateId(),
     name: `Revenue Stream ${index}`,
+    product: 'hydrogen',
     offtakeMode: 'trucks',
     kgPerTruckFill: 80,
     h2ProductionCostPerKg: 2.41,

@@ -1,5 +1,6 @@
 import type {
   AnnualResult,
+  AnnualStreamResult,
   CapexCategory,
   EmployeeRole,
   EscalatedLineItem,
@@ -125,6 +126,7 @@ function computeStreamPeriodResult(
   const zero: StreamPeriodResult = {
     streamId: stream.id,
     streamName: stream.name,
+    product: stream.product,
     revenue: 0,
     cogs: 0,
     dailyQuantityKg: 0,
@@ -143,6 +145,7 @@ function computeStreamPeriodResult(
   return {
     streamId: stream.id,
     streamName: stream.name,
+    product: stream.product,
     revenue,
     cogs,
     dailyQuantityKg: dailyKg,
@@ -290,6 +293,12 @@ export function computeCapexByCategory(scenario: Scenario): Partial<Record<Capex
 
 export function computeTotalCapex(scenario: Scenario): number {
   return sum(Object.values(computeCapexByCategory(scenario)));
+}
+
+/** Total Project CapEx minus the Contingency category — i.e. what construction is budgeted to cost before the contingency buffer. */
+export function computeBaseCapexBeforeContingency(scenario: Scenario): number {
+  const byCategory = computeCapexByCategory(scenario);
+  return computeTotalCapex(scenario) - (byCategory.contingency ?? 0);
 }
 
 /** Sum of all CapEx tagged itcEligible (across all years) plus any additionalEligibleCostAmount — the base the ITC % is applied to in 'percentOfEligibleCapex' mode. */
@@ -467,6 +476,20 @@ export function computeAnnualSummary(
     const revenue = sum(yearPeriods.map((p) => p.revenue));
     const cogs = sum(yearPeriods.map((p) => p.cogs));
     const grossProfit = revenue - cogs;
+
+    const streamBreakdownMap = new Map<string, AnnualStreamResult>();
+    for (const p of yearPeriods) {
+      for (const s of p.streamBreakdown) {
+        const existing = streamBreakdownMap.get(s.streamId);
+        if (existing) {
+          existing.revenue += s.revenue;
+          existing.cogs += s.cogs;
+        } else {
+          streamBreakdownMap.set(s.streamId, { streamId: s.streamId, streamName: s.streamName, revenue: s.revenue, cogs: s.cogs });
+        }
+      }
+    }
+    const streamBreakdown = Array.from(streamBreakdownMap.values());
     const ebitda = sum(yearPeriods.map((p) => p.ebitda));
     const interest = sum(yearPeriods.map((p) => p.interest));
     const principal = sum(yearPeriods.map((p) => p.principal));
@@ -537,6 +560,7 @@ export function computeAnnualSummary(
       isPartialRevenue,
       revenue,
       cogs,
+      streamBreakdown,
       grossProfit,
       grossMarginPct: revenue > 0 ? grossProfit / revenue : null,
       preRevenueOpex,
@@ -738,11 +762,21 @@ export function computeMaxDailyCapacityKg(scenario: Scenario): number {
  * average price that would exactly cover total COGS + operating expenses
  * at the modeled volumes (ignores debt service, D&A, and taxes).
  */
+/**
+ * Break-even $/kg of HYDROGEN specifically — total costs recovered per kg of
+ * the core product. Other products (e.g. byproduct oxygen) are excluded from
+ * the kg denominator so their volume doesn't dilute/mislead this figure,
+ * even though their revenue still reduces costs elsewhere in the model.
+ */
 export function computeBreakEvenPricePerKg(periods: PeriodResult[]): number {
   const revenuePeriods = periods.filter((p) => !p.isConstruction);
   const totalKg = sum(
     revenuePeriods.map((p) =>
-      sum(p.streamBreakdown.map((s) => s.dailyQuantityKg * s.operatingDays)),
+      sum(
+        p.streamBreakdown
+          .filter((s) => s.product === 'hydrogen')
+          .map((s) => s.dailyQuantityKg * s.operatingDays),
+      ),
     ),
   );
   if (totalKg === 0) return 0;

@@ -390,7 +390,7 @@ function EmployeeRolesTab() {
                     <p className="font-medium">{r.title || 'Untitled Role'}</p>
                     <p className="text-muted-foreground text-xs">
                       {formatCurrency(computeRoleAnnualSalary(r, r.baseSalaryYear))}/yr starting ·{' '}
-                      {ROLE_ESCALATION_LABELS[r.salaryEscalation.type]} · {formatPercent(r.benefitsPct, 0)}{' '}
+                      {ROLE_ESCALATION_LABELS[r.salaryEscalation.type]} · {formatPercent(r.benefitsPct, 1)}{' '}
                       benefits · peak {peakHeadcount} FTE
                     </p>
                   </div>
@@ -544,14 +544,15 @@ function EmployeeRolesTab() {
                 onChange={(v) => updateEmployeeRole(role.id, { benefitsPct: v })}
                 min={0}
                 max={0.5}
-                step={0.01}
-                formatValue={(v) => formatPercent(v, 0)}
+                step={0.001}
+                formatValue={(v) => formatPercent(v, 1)}
               />
 
               <div className="grid gap-1.5">
                 <Label className="text-muted-foreground">Headcount by Year</Label>
                 <p className="text-muted-foreground text-xs">
                   Number of people in this role each year — 0 (or blank) before it's hired.
+                  Decimals are allowed for part-time headcount (e.g. 0.5 for a half-time hire).
                 </p>
                 <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
                   {years.map((year) => (
@@ -561,7 +562,7 @@ function EmployeeRolesTab() {
                         className="h-8 text-xs"
                         value={String(role.headcountByYear[year] ?? 0)}
                         onChange={(e) => {
-                          const num = Number(e.target.value.replace(/[^0-9]/g, ''));
+                          const num = Number(e.target.value.replace(/[^0-9.]/g, ''));
                           if (!Number.isNaN(num)) setRoleHeadcount(role.id, year, num);
                         }}
                       />

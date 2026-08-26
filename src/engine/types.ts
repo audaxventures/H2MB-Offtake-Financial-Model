@@ -69,6 +69,15 @@ export interface ModelSettings {
  */
 export type OfftakeMode = 'trucks' | 'direct';
 
+/** What's actually being sold — mainly used to keep hydrogen-specific metrics (like break-even $/kg) from being diluted by other products (e.g. byproduct oxygen). */
+export type RevenueProduct = 'hydrogen' | 'oxygen' | 'other';
+
+export const REVENUE_PRODUCT_LABELS: Record<RevenueProduct, string> = {
+  hydrogen: 'Hydrogen',
+  oxygen: 'Oxygen',
+  other: 'Other',
+};
+
 /** One quarter (years 1..quarterlyYears) or one full year (years quarterlyYears+1..totalYears) of a revenue stream's inputs. */
 export interface PeriodRevenueInput {
   year: number;
@@ -89,6 +98,7 @@ export interface PeriodRevenueInput {
 export interface RevenueStream {
   id: string;
   name: string;
+  product: RevenueProduct;
   offtakeMode: OfftakeMode;
   kgPerTruckFill: number;
   h2ProductionCostPerKg: number;
@@ -257,6 +267,7 @@ export interface ModelPeriod {
 export interface StreamPeriodResult {
   streamId: string;
   streamName: string;
+  product: RevenueProduct;
   revenue: number;
   cogs: number;
   dailyQuantityKg: number;
@@ -286,12 +297,21 @@ export interface PeriodResult extends ModelPeriod {
   dscr: number | null;
 }
 
+export interface AnnualStreamResult {
+  streamId: string;
+  streamName: string;
+  revenue: number;
+  cogs: number;
+}
+
 export interface AnnualResult {
   year: number;
   isConstruction: boolean;
   isPartialRevenue: boolean;
   revenue: number;
   cogs: number;
+  /** Per-stream breakdown of revenue/cogs for the year, in scenario.revenueStreams order. */
+  streamBreakdown: AnnualStreamResult[];
   grossProfit: number;
   grossMarginPct: number | null;
   preRevenueOpex: number;

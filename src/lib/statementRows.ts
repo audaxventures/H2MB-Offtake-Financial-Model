@@ -1,6 +1,7 @@
-import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
-import type { AnnualResult, CapexCategory, ExpenseCategory, Scenario } from '@/engine/types';
+import { CAPEX_CATEGORY_LABELS } from '@/engine/types';
+import type { AnnualResult, CapexCategory, Scenario } from '@/engine/types';
 import { formatCurrency, formatDSCR, formatPercent } from '@/engine/formatters';
+import { computeRoleAnnualCost, resolveLineItemAnnualAmount } from '@/engine/calculations';
 import type { RowSpec } from '@/components/shared/StatementTable';
 
 export type StatementDetail = 'summary' | 'detailed';
@@ -33,19 +34,6 @@ export function filterRowsForDetail(rows: RowSpec[], detail: StatementDetail): R
     });
 }
 
-export function usedExpenseCategories(scenario: Scenario, annual: AnnualResult[]): ExpenseCategory[] {
-  const set = new Set<ExpenseCategory>();
-  for (const item of scenario.expenseLineItems) {
-    if (item.category !== 'cogs') set.add(item.category);
-  }
-  for (const a of annual) {
-    for (const category of Object.keys(a.expensesByCategory) as ExpenseCategory[]) {
-      if (category !== 'cogs') set.add(category);
-    }
-  }
-  return Array.from(set);
-}
-
 export function usedCapexCategories(scenario: Scenario, annual: AnnualResult[]): CapexCategory[] {
   const set = new Set<CapexCategory>();
   for (const item of scenario.capexLineItems) set.add(item.category);
@@ -60,13 +48,80 @@ export function usedCapexCategories(scenario: Scenario, annual: AnnualResult[]):
  * EBITDA -> D&A -> EBIT -> Interest -> Net Profit (Loss). Deliberately
  * excludes CapEx (capitalized, not expensed), principal repayment, and ITC
  * (a financing item, not income) — see buildCashFlowRows for those.
+ *
+ * Revenue, COGS, and Operating Expenses are broken out line by line (each
+ * named revenue stream, each named expense line item) rather than rolled up
+ * by category — headcount-driven payroll from Employee Roles is the one
+ * exception, combined into a single row to avoid cluttering the statement
+ * with one row per hire.
  */
-export function buildProfitAndLossRows(scenario: Scenario, annual: AnnualResult[]): RowSpec[] {
-  const categories = usedExpenseCategories(scenario, annual);
+export function buildProfitAndLossRows(scenario: Scenario): RowSpec[] {
+  const cogsLineItems = scenario.expenseLineItems.filter((i) => i.category === 'cogs');
+  const opexLineItems = scenario.expenseLineItems.filter((i) => i.category !== 'cogs');
+
+  const revenueRows: RowSpec[] = scenario.revenueStreams.map(
+    (stream): RowSpec => ({
+      key: `revenue-${stream.id}`,
+      label: stream.name || 'Untitled Stream',
+      render: (a) => formatCurrency(a.streamBreakdown.find((s) => s.streamId === stream.id)?.revenue ?? 0),
+    }),
+  );
+  if (revenueRows.length > 0) revenueRows[0] = { ...revenueRows[0], section: 'Revenue' };
+
+  const cogsRows: RowSpec[] = [
+    ...scenario.revenueStreams.map(
+      (stream): RowSpec => ({
+        key: `cogs-stream-${stream.id}`,
+        label: `${stream.name || 'Untitled Stream'} — Production Cost`,
+        render: (a) => formatCurrency(-(a.streamBreakdown.find((s) => s.streamId === stream.id)?.cogs ?? 0)),
+      }),
+    ),
+    ...cogsLineItems.map(
+      (item): RowSpec => ({
+        key: `cogs-item-${item.id}`,
+        label: item.name || 'Untitled Item',
+        render: (a) => formatCurrency(-resolveLineItemAnnualAmount(item, a.year, a.revenue)),
+      }),
+    ),
+  ];
+  if (cogsRows.length > 0) cogsRows[0] = { ...cogsRows[0], section: 'Cost of Goods Sold' };
+
+  const opexRows: RowSpec[] = opexLineItems.map(
+    (item): RowSpec => ({
+      key: `expense-${item.id}`,
+      label: item.name || 'Untitled Item',
+      render: (a) => formatCurrency(-resolveLineItemAnnualAmount(item, a.year, a.revenue)),
+    }),
+  );
+  if (scenario.employeeRoles.length > 0) {
+    opexRows.push({
+      key: 'payrollRoles',
+      label: 'Payroll & Benefits (Employee Roles)',
+      render: (a) =>
+        formatCurrency(-scenario.employeeRoles.reduce((acc, r) => acc + computeRoleAnnualCost(r, a.year), 0)),
+    });
+  }
 
   return [
-    { key: 'revenue', section: 'Revenue', label: 'Hydrogen Sales Revenue', render: (a) => formatCurrency(a.revenue), summary: true },
-    { key: 'cogs', label: 'Cost of Goods Sold', render: (a) => formatCurrency(-a.cogs), summary: true },
+    ...revenueRows,
+    {
+      key: 'totalRevenue',
+      section: revenueRows.length === 0 ? 'Revenue' : undefined,
+      label: 'Total Revenue',
+      render: (a) => formatCurrency(a.revenue),
+      emphasis: true,
+      summary: true,
+    },
+
+    ...cogsRows,
+    {
+      key: 'totalCogs',
+      section: cogsRows.length === 0 ? 'Cost of Goods Sold' : undefined,
+      label: 'Total Cost of Goods Sold',
+      render: (a) => formatCurrency(-a.cogs),
+      emphasis: true,
+      summary: true,
+    },
     { key: 'grossProfit', label: 'Gross Profit', render: (a) => formatCurrency(a.grossProfit), emphasis: true },
     { key: 'grossMargin', label: 'Gross Margin %', render: (a) => formatPercent(a.grossMarginPct) },
 
@@ -76,13 +131,7 @@ export function buildProfitAndLossRows(scenario: Scenario, annual: AnnualResult[
       label: 'Pre-Revenue / Construction OpEx',
       render: (a) => formatCurrency(-a.preRevenueOpex),
     },
-    ...categories.map(
-      (category): RowSpec => ({
-        key: `expense-${category}`,
-        label: EXPENSE_CATEGORY_LABELS[category],
-        render: (a) => formatCurrency(-(a.expensesByCategory[category] ?? 0)),
-      }),
-    ),
+    ...opexRows,
     {
       key: 'totalOpex',
       label: 'Total Operating Expenses',

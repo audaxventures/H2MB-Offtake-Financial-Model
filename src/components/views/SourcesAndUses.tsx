@@ -3,10 +3,12 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertBanner } from '@/components/shared/AlertBanner';
 import {
+  computeBaseCapexBeforeContingency,
   computeDebtPayoffQuarter,
   computeEquityIRRFromScenario,
   computeITCAmount,
   computeITCEligibleBase,
+  computeTotalCapex,
   periodLabel,
   runModel,
 } from '@/engine/calculations';
@@ -31,6 +33,9 @@ export function SourcesAndUses() {
   const eligibleCapex = useMemo(() => computeITCEligibleBase(current), [current]);
   const itcAmount = useMemo(() => computeITCAmount(current), [current]);
   const itcPctOfCapex = eligibleCapex > 0 ? itcAmount / eligibleCapex : 0;
+
+  const totalProjectCapex = useMemo(() => computeTotalCapex(current), [current]);
+  const baseCapexBeforeContingency = useMemo(() => computeBaseCapexBeforeContingency(current), [current]);
 
   const savingsChartData = [
     { label: 'Without ITC', value: outputs.totalInterestPaidNoITC },
@@ -75,10 +80,12 @@ export function SourcesAndUses() {
           <CardContent>
             <LineRow label="Hard CapEx" value={formatCurrency(sourcesAndUses.uses.hardCapex)} />
             <LineRow label="Soft Costs" value={formatCurrency(sourcesAndUses.uses.softCosts)} />
-            <LineRow label="Contingency" value={formatCurrency(sourcesAndUses.uses.contingency)} />
             {sourcesAndUses.uses.otherCapex > 0 && (
               <LineRow label="Other Capital Costs" value={formatCurrency(sourcesAndUses.uses.otherCapex)} />
             )}
+            <LineRow label="Base CapEx Before Contingency" value={formatCurrency(baseCapexBeforeContingency)} />
+            <LineRow label="Contingency" value={formatCurrency(sourcesAndUses.uses.contingency)} />
+            <LineRow label="Total Project CapEx" value={formatCurrency(totalProjectCapex)} strong />
             <LineRow
               label={`Pre-Revenue OpEx (${current.construction.constructionDurationMonths} mo × ${formatCurrency(current.construction.constructionOpexPerMonth / 1000)}k)`}
               value={formatCurrency(sourcesAndUses.uses.preRevenueOpex)}

@@ -1,8 +1,18 @@
 import XLSX from 'xlsx-js-style';
-import { DSCR_DANGER, DSCR_TARGET, computeCapexByCategory, computeITCAmount, computeITCEligibleBase } from '@/engine/calculations';
+import {
+  DSCR_DANGER,
+  DSCR_TARGET,
+  computeBaseCapexBeforeContingency,
+  computeCapexByCategory,
+  computeITCAmount,
+  computeITCEligibleBase,
+  computeRoleAnnualCost,
+  computeTotalCapex,
+  resolveLineItemAnnualAmount,
+} from '@/engine/calculations';
 import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
 import type { ModelOutputs, Scenario } from '@/engine/types';
-import { usedCapexCategories, usedExpenseCategories } from '@/lib/statementRows';
+import { usedCapexCategories } from '@/lib/statementRows';
 
 const NAVY = '1F4E79';
 const WHITE = 'FFFFFF';
@@ -89,8 +99,10 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
   section('Construction Costs');
   line('Hard CapEx', capexByCategory.hardCapex ?? 0);
   line('Soft Costs', capexByCategory.softCosts ?? 0);
-  line('Contingency', capexByCategory.contingency ?? 0);
   if (capexByCategory.other) line('Other Capital Costs', capexByCategory.other);
+  line('Base CapEx Before Contingency', computeBaseCapexBeforeContingency(scenario));
+  line('Contingency', capexByCategory.contingency ?? 0);
+  line('Total Project CapEx', computeTotalCapex(scenario));
   line('Construction OpEx / Month', scenario.construction.constructionOpexPerMonth);
   line('Construction Duration (months)', scenario.construction.constructionDurationMonths, '0');
   line('Debt Service Reserve (months)', scenario.construction.debtServiceReserveMonths, '0');
@@ -251,18 +263,45 @@ function buildProfitAndLossSheet(scenario: Scenario, outputs: ModelOutputs): XLS
       ...values.map((v) => cell(v ?? '', style, numFmt)),
     ]);
 
-  const categories = usedExpenseCategories(scenario, outputs.annual);
+  const cogsLineItems = scenario.expenseLineItems.filter((i) => i.category === 'cogs');
+  const opexLineItems = scenario.expenseLineItems.filter((i) => i.category !== 'cogs');
+  const revenueByYear = new Map(outputs.annual.map((a) => [a.year, a.revenue]));
 
-  line('Hydrogen Sales Revenue', outputs.annual.map((a) => a.revenue));
-  line('Cost of Goods Sold', outputs.annual.map((a) => -a.cogs));
+  for (const stream of scenario.revenueStreams) {
+    line(
+      stream.name || 'Untitled Stream',
+      outputs.annual.map((a) => a.streamBreakdown.find((s) => s.streamId === stream.id)?.revenue ?? 0),
+    );
+  }
+  line('Total Revenue', outputs.annual.map((a) => a.revenue), CURRENCY_FMT, boldStyle);
+
+  for (const stream of scenario.revenueStreams) {
+    line(
+      `${stream.name || 'Untitled Stream'} — Production Cost`,
+      outputs.annual.map((a) => -(a.streamBreakdown.find((s) => s.streamId === stream.id)?.cogs ?? 0)),
+    );
+  }
+  for (const item of cogsLineItems) {
+    line(
+      item.name || 'Untitled Item',
+      outputs.annual.map((a) => -resolveLineItemAnnualAmount(item, a.year, revenueByYear.get(a.year) ?? 0)),
+    );
+  }
+  line('Total Cost of Goods Sold', outputs.annual.map((a) => -a.cogs), CURRENCY_FMT, boldStyle);
   line('Gross Profit', outputs.annual.map((a) => a.grossProfit), CURRENCY_FMT, boldStyle);
   line('Gross Margin %', outputs.annual.map((a) => a.grossMarginPct), PERCENT_FMT);
 
   line('Pre-Revenue / Construction OpEx', outputs.annual.map((a) => -a.preRevenueOpex));
-  for (const category of categories) {
+  for (const item of opexLineItems) {
     line(
-      EXPENSE_CATEGORY_LABELS[category],
-      outputs.annual.map((a) => -(a.expensesByCategory[category] ?? 0)),
+      item.name || 'Untitled Item',
+      outputs.annual.map((a) => -resolveLineItemAnnualAmount(item, a.year, revenueByYear.get(a.year) ?? 0)),
+    );
+  }
+  if (scenario.employeeRoles.length > 0) {
+    line(
+      'Payroll & Benefits (Employee Roles)',
+      outputs.annual.map((a) => -scenario.employeeRoles.reduce((acc, r) => acc + computeRoleAnnualCost(r, a.year), 0)),
     );
   }
   line(
@@ -348,7 +387,7 @@ function buildCashFlowSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.Wor
   return buildSheet(rows, colWidths);
 }
 
-function buildSourcesUsesSheet(outputs: ModelOutputs): XLSX.WorkSheet {
+function buildSourcesUsesSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkSheet {
   const { sourcesAndUses: su } = outputs;
   const rows: XLSX.CellObject[][] = [];
   rows.push([cell('Sources', headerStyle), cell('', headerStyle)]);
@@ -362,10 +401,12 @@ function buildSourcesUsesSheet(outputs: ModelOutputs): XLSX.WorkSheet {
   rows.push([cell('Uses', headerStyle), cell('', headerStyle)]);
   rows.push([cell('Hard CapEx'), cell(su.uses.hardCapex, undefined, CURRENCY_FMT)]);
   rows.push([cell('Soft Costs'), cell(su.uses.softCosts, undefined, CURRENCY_FMT)]);
-  rows.push([cell('Contingency'), cell(su.uses.contingency, undefined, CURRENCY_FMT)]);
   if (su.uses.otherCapex) {
     rows.push([cell('Other Capital Costs'), cell(su.uses.otherCapex, undefined, CURRENCY_FMT)]);
   }
+  rows.push([cell('Base CapEx Before Contingency', boldStyle), cell(computeBaseCapexBeforeContingency(scenario), boldStyle, CURRENCY_FMT)]);
+  rows.push([cell('Contingency'), cell(su.uses.contingency, undefined, CURRENCY_FMT)]);
+  rows.push([cell('Total Project CapEx', boldStyle), cell(computeTotalCapex(scenario), boldStyle, CURRENCY_FMT)]);
   rows.push([cell('Pre-Revenue OpEx'), cell(su.uses.preRevenueOpex, undefined, CURRENCY_FMT)]);
   rows.push([cell('Debt Service Reserve'), cell(su.uses.debtServiceReserve, undefined, CURRENCY_FMT)]);
   rows.push([cell('Working Capital Buffer'), cell(su.uses.workingCapitalBuffer, undefined, CURRENCY_FMT)]);
@@ -385,7 +426,7 @@ export function exportToExcel(scenario: Scenario, outputs: ModelOutputs): void {
   XLSX.utils.book_append_sheet(workbook, buildPeriodSheet(outputs), 'Period Detail');
   XLSX.utils.book_append_sheet(workbook, buildProfitAndLossSheet(scenario, outputs), 'Profit & Loss');
   XLSX.utils.book_append_sheet(workbook, buildCashFlowSheet(scenario, outputs), 'Cash Flow Statement');
-  XLSX.utils.book_append_sheet(workbook, buildSourcesUsesSheet(outputs), 'Sources & Uses');
+  XLSX.utils.book_append_sheet(workbook, buildSourcesUsesSheet(scenario, outputs), 'Sources & Uses');
 
   const fileName = `H2MB_Finance_Model_${scenario.name.replace(/\s+/g, '_')}.xlsx`;
   XLSX.writeFile(workbook, fileName);

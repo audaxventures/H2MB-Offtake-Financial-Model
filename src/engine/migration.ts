@@ -146,6 +146,7 @@ function convertLegacyScenario(raw: LegacyScenario): Scenario {
   const revenueStream: RevenueStream = {
     id: generateId(),
     name: 'Primary Offtake (migrated)',
+    product: 'hydrogen',
     offtakeMode,
     kgPerTruckFill,
     h2ProductionCostPerKg: production.h2ProductionCostPerKg ?? 2.41,
@@ -228,6 +229,7 @@ function backfillCurrentShape(raw: Scenario): Scenario {
     plant: { ...DEFAULT_PLANT, ...raw.plant },
     revenueStreams: (raw.revenueStreams ?? []).map((s) => ({
       ...s,
+      product: s.product ?? 'hydrogen',
       periods: (s.periods ?? []).map((p) => ({
         ...p,
         dailyQuantityKg: p.dailyQuantityKg ?? p.trucksPerDay * s.kgPerTruckFill,

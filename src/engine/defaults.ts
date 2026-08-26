@@ -102,6 +102,7 @@ export function createDefaultRevenueStream(modelSettings: ModelSettings): Revenu
   return {
     id: generateId(),
     name: 'Truck Fleet — Class 8 FCET',
+    product: 'hydrogen',
     offtakeMode: 'trucks',
     kgPerTruckFill: 80,
     h2ProductionCostPerKg: 2.41,

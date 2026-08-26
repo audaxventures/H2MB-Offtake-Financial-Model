@@ -10,9 +10,11 @@ import {
   type StatementDetail,
 } from '@/lib/statementRows';
 import {
+  computeBaseCapexBeforeContingency,
   computeITCAmount,
   computeITCEligibleBase,
   computeRoleAnnualCost,
+  computeTotalCapex,
   resolveLineItemAnnualAmount,
 } from '@/engine/calculations';
 import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
@@ -210,6 +212,8 @@ export function SourcesUsesPage({ scenario, outputs }: { scenario: Scenario; out
   const su = outputs.sourcesAndUses;
   const eligibleBase = computeITCEligibleBase(scenario);
   const itcAmount = computeITCAmount(scenario);
+  const totalProjectCapex = computeTotalCapex(scenario);
+  const baseCapexBeforeContingency = computeBaseCapexBeforeContingency(scenario);
 
   return (
     <PageShell scenario={scenario} title="Sources & Uses / ITC" width={width}>
@@ -230,8 +234,10 @@ export function SourcesUsesPage({ scenario, outputs }: { scenario: Scenario; out
           rows={[
             ['Hard CapEx', formatCurrency(su.uses.hardCapex)],
             ['Soft Costs', formatCurrency(su.uses.softCosts)],
-            ['Contingency', formatCurrency(su.uses.contingency)],
             ...(su.uses.otherCapex > 0 ? ([['Other CapEx', formatCurrency(su.uses.otherCapex)]] as [string, string][]) : []),
+            ['Base CapEx Before Contingency', formatCurrency(baseCapexBeforeContingency)],
+            ['Contingency', formatCurrency(su.uses.contingency)],
+            ['Total Project CapEx', formatCurrency(totalProjectCapex)],
             ['Pre-Rev OpEx', formatCurrency(su.uses.preRevenueOpex)],
             ['DSR', formatCurrency(su.uses.debtServiceReserve)],
             ['Working Capital', formatCurrency(su.uses.workingCapitalBuffer)],
@@ -270,7 +276,7 @@ export function StatementPage({
   detail: StatementDetail;
 }) {
   const width = pageWidthFor(outputs.annual.length);
-  const allRows = statement === 'pnl' ? buildProfitAndLossRows(scenario, outputs.annual) : buildCashFlowRows(scenario, outputs.annual);
+  const allRows = statement === 'pnl' ? buildProfitAndLossRows(scenario) : buildCashFlowRows(scenario, outputs.annual);
   const rows = filterRowsForDetail(allRows, detail);
 
   return (
