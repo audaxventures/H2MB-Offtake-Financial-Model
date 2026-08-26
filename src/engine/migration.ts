@@ -10,6 +10,7 @@ import type {
   CapexLineItem,
   CapitalStructure,
   ConstructionCosts,
+  EmployeeRole,
   ExpenseLineItem,
   ITCSettings,
   ModelSettings,
@@ -231,10 +232,19 @@ function backfillCurrentShape(raw: Scenario): Scenario {
       ...item,
       yearOverrides: item.yearOverrides ?? {},
     })),
-    employeeRoles: (raw.employeeRoles ?? []).map((role) => ({
-      ...role,
-      headcountByYear: role.headcountByYear ?? {},
-    })),
+    employeeRoles: (raw.employeeRoles ?? []).map((role) => {
+      const legacyRole = role as EmployeeRole & { annualSalary?: number };
+      return {
+        id: legacyRole.id,
+        title: legacyRole.title,
+        baseSalaryYear: legacyRole.baseSalaryYear ?? 2,
+        baseAnnualSalary: legacyRole.baseAnnualSalary ?? legacyRole.annualSalary ?? 0,
+        salaryEscalation: legacyRole.salaryEscalation ?? { type: 'flat' },
+        salaryYearOverrides: legacyRole.salaryYearOverrides ?? {},
+        benefitsPct: legacyRole.benefitsPct ?? 0,
+        headcountByYear: legacyRole.headcountByYear ?? {},
+      };
+    }),
   };
 }
 

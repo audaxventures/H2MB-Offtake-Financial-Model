@@ -47,6 +47,8 @@ function deepCopyScenario(scenario: Scenario): Scenario {
     })),
     employeeRoles: scenario.employeeRoles.map((role) => ({
       ...role,
+      salaryEscalation: { ...role.salaryEscalation },
+      salaryYearOverrides: { ...role.salaryYearOverrides },
       headcountByYear: { ...role.headcountByYear },
     })),
   };
@@ -133,7 +135,10 @@ function createBlankEmployeeRole(): EmployeeRole {
   return {
     id: generateId(),
     title: 'New Role',
-    annualSalary: 70_000,
+    baseSalaryYear: 2,
+    baseAnnualSalary: 70_000,
+    salaryEscalation: { type: 'flat' },
+    salaryYearOverrides: {},
     benefitsPct: 0.2,
     headcountByYear: { 2: 1 },
   };
@@ -184,9 +189,10 @@ interface ScenarioStoreState {
   removeEmployeeRole: (roleId: string) => void;
   updateEmployeeRole: (
     roleId: string,
-    patch: Partial<Omit<EmployeeRole, 'id' | 'headcountByYear'>>,
+    patch: Partial<Omit<EmployeeRole, 'id' | 'headcountByYear' | 'salaryYearOverrides'>>,
   ) => void;
   setRoleHeadcount: (roleId: string, year: number, headcount: number | undefined) => void;
+  setRoleSalaryYearOverride: (roleId: string, year: number, value: number | undefined) => void;
 
   setCurrentName: (name: string) => void;
   replaceCurrent: (scenario: Scenario) => void;
@@ -419,6 +425,23 @@ export const useScenarioStore = create<ScenarioStoreState>()(
                 headcountByYear[year] = headcount;
               }
               return { ...r, headcountByYear };
+            }),
+          },
+        })),
+
+      setRoleSalaryYearOverride: (roleId, year, value) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            employeeRoles: state.current.employeeRoles.map((r) => {
+              if (r.id !== roleId) return r;
+              const salaryYearOverrides = { ...r.salaryYearOverrides };
+              if (value === undefined) {
+                delete salaryYearOverrides[year];
+              } else {
+                salaryYearOverrides[year] = value;
+              }
+              return { ...r, salaryYearOverrides };
             }),
           },
         })),

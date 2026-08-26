@@ -41,10 +41,11 @@ export function fetchCloudState(token: string) {
   return request<{ data: unknown; updatedAt: string | null }>('/state', { token });
 }
 
-export function saveCloudState(token: string, data: unknown) {
+export function saveCloudState(token: string, data: unknown, opts?: { keepalive?: boolean }) {
   return request<{ ok: true }>('/state', {
     method: 'PUT',
     token,
     body: JSON.stringify({ data }),
+    keepalive: opts?.keepalive,
   });
 }

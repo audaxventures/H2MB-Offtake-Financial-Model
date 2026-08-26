@@ -154,12 +154,17 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
     rows.push([]);
     section('Employee Roles (Payroll & Benefits)');
     for (const role of scenario.employeeRoles) {
+      const escalationDesc =
+        role.salaryEscalation.type === 'percentGrowth'
+          ? `${((role.salaryEscalation.growthRate ?? 0) * 100).toFixed(2)}%/yr growth`
+          : role.salaryEscalation.type === 'manual'
+            ? 'Manual per-year'
+            : 'Flat';
       rows.push([
         cell(role.title, boldStyle),
-        cell(
-          `$${role.annualSalary.toLocaleString('en-CA')} salary · ${(role.benefitsPct * 100).toFixed(0)}% benefits`,
-        ),
+        cell(`${escalationDesc} · ${(role.benefitsPct * 100).toFixed(0)}% benefits`),
       ]);
+      rows.push([cell('  Base Annual Salary'), cell(role.baseAnnualSalary, inputStyle, CURRENCY_FMT)]);
       const headcountByYear = Object.entries(role.headcountByYear)
         .filter(([, count]) => count > 0)
         .sort(([a], [b]) => Number(a) - Number(b))

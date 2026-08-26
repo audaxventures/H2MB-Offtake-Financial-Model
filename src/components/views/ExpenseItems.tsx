@@ -17,6 +17,7 @@ import { DataTable, type DataTableColumn } from '@/components/shared/DataTable';
 import {
   computePayrollFromRoles,
   computeRoleAnnualCost,
+  computeRoleAnnualSalary,
   resolveLineItemAnnualAmount,
 } from '@/engine/calculations';
 import { formatCurrency, formatPercent } from '@/engine/formatters';
@@ -24,12 +25,20 @@ import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
 import type {
   CapexCategory,
   CapexLineItem,
+  EmployeeRole,
   EscalationType,
   ExpenseCategory,
   ExpenseLineItem,
+  SalaryEscalationType,
 } from '@/engine/types';
 import { useScenarioStore } from '@/store/scenarioStore';
 import { useModelOutputs } from '@/store/useModelOutputs';
+
+const ROLE_ESCALATION_LABELS: Record<SalaryEscalationType, string> = {
+  flat: 'Flat Salary (no growth)',
+  percentGrowth: '% Annual Growth (raise)',
+  manual: 'Manual / Per-Year Entry',
+};
 
 const ESCALATION_LABELS: Record<EscalationType, string> = {
   flat: 'Flat $ (no growth)',
@@ -324,6 +333,7 @@ function EmployeeRolesTab() {
   const removeEmployeeRole = useScenarioStore((s) => s.removeEmployeeRole);
   const updateEmployeeRole = useScenarioStore((s) => s.updateEmployeeRole);
   const setRoleHeadcount = useScenarioStore((s) => s.setRoleHeadcount);
+  const setRoleSalaryYearOverride = useScenarioStore((s) => s.setRoleSalaryYearOverride);
 
   const [selectedRoleId, setSelectedRoleId] = useState<string | undefined>(
     current.employeeRoles[0]?.id,
@@ -378,7 +388,8 @@ function EmployeeRolesTab() {
                   <div>
                     <p className="font-medium">{r.title || 'Untitled Role'}</p>
                     <p className="text-muted-foreground text-xs">
-                      {formatCurrency(r.annualSalary)}/yr salary · {formatPercent(r.benefitsPct, 0)}{' '}
+                      {formatCurrency(computeRoleAnnualSalary(r, r.baseSalaryYear))}/yr starting ·{' '}
+                      {ROLE_ESCALATION_LABELS[r.salaryEscalation.type]} · {formatPercent(r.benefitsPct, 0)}{' '}
                       benefits · peak {peakHeadcount} FTE
                     </p>
                   </div>
@@ -419,15 +430,112 @@ function EmployeeRolesTab() {
                 />
               </div>
 
-              <SliderInput
-                label="Annual Salary (per FTE)"
-                value={role.annualSalary}
-                onChange={(v) => updateEmployeeRole(role.id, { annualSalary: v })}
-                min={0}
-                max={300_000}
-                step={2_500}
-                formatValue={(v) => formatCurrency(v)}
-              />
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Salary Escalation</Label>
+                <Select
+                  value={role.salaryEscalation.type}
+                  onValueChange={(v) =>
+                    updateEmployeeRole(role.id, {
+                      salaryEscalation: { ...role.salaryEscalation, type: v as SalaryEscalationType },
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(ROLE_ESCALATION_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {role.salaryEscalation.type !== 'manual' && (
+                <SliderInput
+                  label="Base Annual Salary (per FTE)"
+                  value={role.baseAnnualSalary}
+                  onChange={(v) => updateEmployeeRole(role.id, { baseAnnualSalary: v })}
+                  min={0}
+                  max={300_000}
+                  step={2_500}
+                  formatValue={(v) => formatCurrency(v)}
+                />
+              )}
+
+              {role.salaryEscalation.type === 'percentGrowth' && (
+                <>
+                  <SliderInput
+                    label="Annual Growth Rate (raise)"
+                    value={role.salaryEscalation.growthRate ?? 0}
+                    onChange={(v) =>
+                      updateEmployeeRole(role.id, {
+                        salaryEscalation: { ...role.salaryEscalation, growthRate: v },
+                      })
+                    }
+                    min={-0.1}
+                    max={0.2}
+                    step={0.0025}
+                    formatValue={(v) => formatPercent(v, 2)}
+                  />
+                  <SliderInput
+                    label="Growth Base Year"
+                    value={role.baseSalaryYear}
+                    onChange={(v) => updateEmployeeRole(role.id, { baseSalaryYear: v })}
+                    min={1}
+                    max={current.modelSettings.totalYears}
+                    step={1}
+                    helperText="The year the Base Annual Salary applies to — growth compounds from here"
+                  />
+                </>
+              )}
+
+              {role.salaryEscalation.type === 'manual' && (
+                <p className="text-muted-foreground bg-muted/50 rounded-lg p-3 text-xs">
+                  Set this role's exact salary for each year directly in the per-year table below —
+                  useful for entering known raises year by year. Years without a value use the last
+                  entered/base amount.
+                </p>
+              )}
+
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Per-Year Salary ($) — override any year</Label>
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+                  {years.map((year) => {
+                    const computed = computeRoleAnnualSalary(role, year);
+                    const isOverridden = role.salaryYearOverrides[year] !== undefined;
+                    return (
+                      <div key={year} className="grid gap-1">
+                        <span className="text-muted-foreground text-[11px]">Yr {year}</span>
+                        <Input
+                          className={`h-8 text-xs ${isOverridden ? 'border-primary' : ''}`}
+                          value={Math.round(computed).toString()}
+                          onChange={(e) => {
+                            const num = Number(e.target.value.replace(/[^0-9.-]/g, ''));
+                            if (!Number.isNaN(num)) setRoleSalaryYearOverride(role.id, year, num);
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                {Object.keys(role.salaryYearOverrides).length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-fit"
+                    onClick={() => {
+                      for (const year of Object.keys(role.salaryYearOverrides).map(Number)) {
+                        setRoleSalaryYearOverride(role.id, year, undefined);
+                      }
+                    }}
+                  >
+                    Clear all overrides
+                  </Button>
+                )}
+              </div>
 
               <SliderInput
                 label="Benefits (% of salary)"
@@ -486,7 +594,7 @@ function RolesByYearTable({
   years,
   totalByYear,
 }: {
-  roles: { id: string; title: string; annualSalary: number; benefitsPct: number; headcountByYear: Record<number, number> }[];
+  roles: EmployeeRole[];
   years: number[];
   totalByYear: number[];
 }) {

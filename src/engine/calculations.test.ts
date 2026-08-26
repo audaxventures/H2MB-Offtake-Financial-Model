@@ -15,6 +15,7 @@ import {
   computePayrollFromRoles,
   computeRevenueByYear,
   computeRoleAnnualCost,
+  computeRoleAnnualSalary,
   computeSourcesAndUses,
   computeTotalCapex,
   findITCPeriodIndex,
@@ -567,7 +568,10 @@ describe('Employee Roles (headcount-based payroll)', () => {
   const role: EmployeeRole = {
     id: 'r1',
     title: 'Plant Manager',
-    annualSalary: 100_000,
+    baseSalaryYear: 2,
+    baseAnnualSalary: 100_000,
+    salaryEscalation: { type: 'flat' },
+    salaryYearOverrides: {},
     benefitsPct: 0.2,
     headcountByYear: { 2: 1, 3: 2 },
   };
@@ -583,7 +587,7 @@ describe('Employee Roles (headcount-based payroll)', () => {
   });
 
   it('sums fully-loaded cost across all roles for a given year', () => {
-    const role2: EmployeeRole = { ...role, id: 'r2', annualSalary: 60_000, benefitsPct: 0.1, headcountByYear: { 2: 3 } };
+    const role2: EmployeeRole = { ...role, id: 'r2', baseAnnualSalary: 60_000, benefitsPct: 0.1, headcountByYear: { 2: 3 } };
     const total = computePayrollFromRoles([role, role2], 2);
     expect(total).toBeCloseTo(1 * 100_000 * 1.2 + 3 * 60_000 * 1.1, 6);
   });
@@ -609,6 +613,54 @@ describe('Employee Roles (headcount-based payroll)', () => {
     const y1q1 = periods.find((p) => p.label === 'Y1Q1')!;
     expect(y1q1.isConstruction).toBe(true);
     expect(y1q1.expensesByCategory.payroll).toBeCloseTo((100_000 * 1.2) / 4, 6);
+  });
+
+  describe('salary escalation', () => {
+    it('grows salary at the configured % rate per year from baseSalaryYear, compounding', () => {
+      const growingRole: EmployeeRole = {
+        ...role,
+        salaryEscalation: { type: 'percentGrowth', growthRate: 0.05 },
+        headcountByYear: { 2: 1, 3: 1, 4: 1 },
+      };
+      expect(computeRoleAnnualSalary(growingRole, 2)).toBeCloseTo(100_000, 6);
+      expect(computeRoleAnnualSalary(growingRole, 3)).toBeCloseTo(100_000 * 1.05, 6);
+      expect(computeRoleAnnualSalary(growingRole, 4)).toBeCloseTo(100_000 * 1.05 * 1.05, 6);
+    });
+
+    it('does not zero out salary before baseSalaryYear — headcount alone gates cost', () => {
+      const earlyHireRole: EmployeeRole = {
+        ...role,
+        baseSalaryYear: 5,
+        salaryEscalation: { type: 'percentGrowth', growthRate: 0.05 },
+        headcountByYear: { 1: 1 },
+      };
+      // Year 1 is before baseSalaryYear (5), but the role IS staffed in Year 1 —
+      // salary must still resolve to a sensible (back-projected) amount, not 0.
+      expect(computeRoleAnnualSalary(earlyHireRole, 1)).toBeCloseTo(100_000 * Math.pow(1.05, -4), 6);
+      expect(computeRoleAnnualCost(earlyHireRole, 1)).toBeGreaterThan(0);
+    });
+
+    it('uses an exact manually-entered salary for a given year, falling back to the base elsewhere', () => {
+      const manualRole: EmployeeRole = {
+        ...role,
+        salaryEscalation: { type: 'manual' },
+        salaryYearOverrides: { 3: 130_000 },
+        headcountByYear: { 2: 1, 3: 1 },
+      };
+      expect(computeRoleAnnualSalary(manualRole, 2)).toBeCloseTo(100_000, 6);
+      expect(computeRoleAnnualSalary(manualRole, 3)).toBeCloseTo(130_000, 6);
+      expect(computeRoleAnnualCost(manualRole, 3)).toBeCloseTo(130_000 * 1.2, 6);
+    });
+
+    it('lets a yearOverride win even when escalation is percentGrowth', () => {
+      const overriddenGrowthRole: EmployeeRole = {
+        ...role,
+        salaryEscalation: { type: 'percentGrowth', growthRate: 0.05 },
+        salaryYearOverrides: { 3: 999_999 },
+        headcountByYear: { 2: 1, 3: 1 },
+      };
+      expect(computeRoleAnnualSalary(overriddenGrowthRole, 3)).toBe(999_999);
+    });
   });
 });
 

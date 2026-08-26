@@ -166,20 +166,40 @@ export interface CapexLineItem extends EscalatedLineItem {
   category: CapexCategory;
 }
 
+/** How a role's per-FTE salary changes year to year. ('percentOfRevenue' from EscalationType isn't offered for roles — salary isn't naturally revenue-linked.) */
+export type SalaryEscalationType = Extract<EscalationType, 'flat' | 'percentGrowth' | 'manual'>;
+
+export interface SalaryEscalationConfig {
+  type: SalaryEscalationType;
+  growthRate?: number;
+}
+
 /**
  * A single headcount role (e.g. "Plant Manager", "Operations Technician")
  * used to build up the Payroll & Benefits cost from an actual hiring plan
  * rather than a single escalating dollar figure. headcountByYear tracks how
  * many FTEs are in this role in each year (0 where not yet hired), so
- * growth and timing are explicit. Annual cost per year is
- * headcount × annualSalary × (1 + benefitsPct); it rolls into the 'payroll'
- * expense category alongside (additively with) any manual ExpenseLineItems
- * of that category.
+ * growth and timing are explicit and independent of salary timing.
+ *
+ * Per-FTE salary is resolved by `computeRoleAnnualSalary()`: flat, growing
+ * at salaryEscalation.growthRate per year from baseSalaryYear, or exact
+ * salaries entered per year via salaryYearOverrides (a raise). Unlike
+ * ExpenseLineItem/CapexLineItem's startYear, baseSalaryYear is only a
+ * reference point for the growth calculation — it never zeroes out salary
+ * before it, since headcountByYear already fully controls which years this
+ * role costs anything.
+ *
+ * Annual cost per year is headcount × resolvedSalary × (1 + benefitsPct);
+ * it rolls into the 'payroll' expense category alongside (additively with)
+ * any manual ExpenseLineItems of that category.
  */
 export interface EmployeeRole {
   id: string;
   title: string;
-  annualSalary: number;
+  baseSalaryYear: number;
+  baseAnnualSalary: number;
+  salaryEscalation: SalaryEscalationConfig;
+  salaryYearOverrides: Record<number, number>;
   benefitsPct: number;
   headcountByYear: Record<number, number>;
 }

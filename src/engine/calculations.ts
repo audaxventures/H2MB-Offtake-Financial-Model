@@ -190,9 +190,35 @@ export function roleHeadcountForYear(role: EmployeeRole, year: number): number {
   return role.headcountByYear[year] ?? 0;
 }
 
-/** A role's fully-loaded annual cost in a given year: headcount × salary × (1 + benefits%). */
+/**
+ * A role's per-FTE salary in a given year: flat, growing at
+ * salaryEscalation.growthRate per year from baseSalaryYear, or an exact
+ * manually-entered salary for that year. Unlike resolveLineItemAnnualAmount,
+ * this never zeroes out based on year — headcountByYear alone controls
+ * which years this role costs anything, so a role hired before its
+ * baseSalaryYear (or with a growth rate referencing a later year) still
+ * resolves a sensible salary.
+ */
+export function computeRoleAnnualSalary(role: EmployeeRole, year: number): number {
+  if (role.salaryYearOverrides[year] !== undefined) return role.salaryYearOverrides[year];
+
+  switch (role.salaryEscalation.type) {
+    case 'percentGrowth': {
+      const yearsElapsed = year - role.baseSalaryYear;
+      const rate = role.salaryEscalation.growthRate ?? 0;
+      return role.baseAnnualSalary * Math.pow(1 + rate, yearsElapsed);
+    }
+    case 'manual':
+      return role.baseAnnualSalary;
+    case 'flat':
+    default:
+      return role.baseAnnualSalary;
+  }
+}
+
+/** A role's fully-loaded annual cost in a given year: headcount × resolved salary × (1 + benefits%). */
 export function computeRoleAnnualCost(role: EmployeeRole, year: number): number {
-  return roleHeadcountForYear(role, year) * role.annualSalary * (1 + role.benefitsPct);
+  return roleHeadcountForYear(role, year) * computeRoleAnnualSalary(role, year) * (1 + role.benefitsPct);
 }
 
 /** Total fully-loaded payroll cost across all employee roles in a given year. */
