@@ -3,6 +3,7 @@ import type {
   CapexLineItem,
   CapitalStructure,
   ConstructionCosts,
+  EmployeeRole,
   ExpenseLineItem,
   ITCSettings,
   ModelSettings,
@@ -222,6 +223,11 @@ export function createDefaultCapexLineItems(): CapexLineItem[] {
   ];
 }
 
+/** No default headcount plan — a user who wants role-based payroll builds it up themselves under Expense Items → Employee Roles. */
+export function createDefaultEmployeeRoles(): EmployeeRole[] {
+  return [];
+}
+
 export function createDefaultScenario(name = 'Base Case'): Scenario {
   const modelSettings = { ...DEFAULT_MODEL_SETTINGS };
   return {
@@ -236,5 +242,6 @@ export function createDefaultScenario(name = 'Base Case'): Scenario {
     revenueStreams: [createDefaultRevenueStream(modelSettings)],
     expenseLineItems: createDefaultExpenseLineItems(),
     capexLineItems: createDefaultCapexLineItems(),
+    employeeRoles: createDefaultEmployeeRoles(),
   };
 }

@@ -166,6 +166,24 @@ export interface CapexLineItem extends EscalatedLineItem {
   category: CapexCategory;
 }
 
+/**
+ * A single headcount role (e.g. "Plant Manager", "Operations Technician")
+ * used to build up the Payroll & Benefits cost from an actual hiring plan
+ * rather than a single escalating dollar figure. headcountByYear tracks how
+ * many FTEs are in this role in each year (0 where not yet hired), so
+ * growth and timing are explicit. Annual cost per year is
+ * headcount × annualSalary × (1 + benefitsPct); it rolls into the 'payroll'
+ * expense category alongside (additively with) any manual ExpenseLineItems
+ * of that category.
+ */
+export interface EmployeeRole {
+  id: string;
+  title: string;
+  annualSalary: number;
+  benefitsPct: number;
+  headcountByYear: Record<number, number>;
+}
+
 export interface Scenario {
   id: string;
   name: string;
@@ -177,6 +195,7 @@ export interface Scenario {
   modelSettings: ModelSettings;
   revenueStreams: RevenueStream[];
   expenseLineItems: ExpenseLineItem[];
+  employeeRoles: EmployeeRole[];
   capexLineItems: CapexLineItem[];
 }
 

@@ -14,7 +14,11 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { SliderInput } from '@/components/shared/SliderInput';
 import { DataTable, type DataTableColumn } from '@/components/shared/DataTable';
-import { resolveLineItemAnnualAmount } from '@/engine/calculations';
+import {
+  computePayrollFromRoles,
+  computeRoleAnnualCost,
+  resolveLineItemAnnualAmount,
+} from '@/engine/calculations';
 import { formatCurrency, formatPercent } from '@/engine/formatters';
 import { CAPEX_CATEGORY_LABELS, EXPENSE_CATEGORY_LABELS } from '@/engine/types';
 import type {
@@ -39,10 +43,14 @@ export function ExpenseItems() {
     <Tabs defaultValue="opex" className="gap-6">
       <TabsList>
         <TabsTrigger value="opex">Operating Expenses</TabsTrigger>
+        <TabsTrigger value="roles">Employee Roles</TabsTrigger>
         <TabsTrigger value="capex">Construction / CapEx</TabsTrigger>
       </TabsList>
       <TabsContent value="opex">
         <OperatingExpensesTab />
+      </TabsContent>
+      <TabsContent value="roles">
+        <EmployeeRolesTab />
       </TabsContent>
       <TabsContent value="capex">
         <CapexTab />
@@ -69,6 +77,8 @@ function OperatingExpensesTab() {
   const years = Array.from({ length: current.modelSettings.totalYears }, (_, i) => i + 1);
 
   const totalOpexByYear = outputs.annual.map((a) => a.totalOperatingExpenses);
+  const roleTotalByYear = years.map((year) => computePayrollFromRoles(current.employeeRoles, year));
+  const hasRoles = current.employeeRoles.length > 0;
 
   return (
     <div className="grid gap-6">
@@ -296,10 +306,219 @@ function OperatingExpensesTab() {
             revenueByYear={revenueByYear}
             totalByYear={totalOpexByYear}
             totalLabel="Total Operating Expenses"
+            extraRow={
+              hasRoles
+                ? { label: 'Payroll & Benefits (from Employee Roles)', values: roleTotalByYear }
+                : undefined
+            }
           />
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function EmployeeRolesTab() {
+  const current = useScenarioStore((s) => s.current);
+  const addEmployeeRole = useScenarioStore((s) => s.addEmployeeRole);
+  const removeEmployeeRole = useScenarioStore((s) => s.removeEmployeeRole);
+  const updateEmployeeRole = useScenarioStore((s) => s.updateEmployeeRole);
+  const setRoleHeadcount = useScenarioStore((s) => s.setRoleHeadcount);
+
+  const [selectedRoleId, setSelectedRoleId] = useState<string | undefined>(
+    current.employeeRoles[0]?.id,
+  );
+  const role =
+    current.employeeRoles.find((r) => r.id === selectedRoleId) ?? current.employeeRoles[0];
+
+  const years = Array.from({ length: current.modelSettings.totalYears }, (_, i) => i + 1);
+  const roleCostByYear = (r: (typeof current.employeeRoles)[number]) =>
+    years.map((year) => computeRoleAnnualCost(r, year));
+  const totalCostByYear = years.map((year) => computePayrollFromRoles(current.employeeRoles, year));
+
+  return (
+    <div className="grid gap-6">
+      <p className="text-muted-foreground -mt-2 text-sm">
+        Build up Payroll &amp; Benefits from an actual hiring plan: list each role, its salary and
+        benefits load, and how many people fill it in each year — so headcount growth and timing
+        are explicit rather than a single escalating number. This adds to the "Payroll &amp;
+        Benefits" expense category; delete or zero out any manual payroll line item under Operating
+        Expenses to avoid double-counting.
+      </p>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_1.3fr]">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>Employee Roles</CardTitle>
+            <Button size="sm" variant="outline" onClick={addEmployeeRole}>
+              <Plus />
+              Add Role
+            </Button>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            {current.employeeRoles.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                No roles yet. Add one to start building your hiring plan.
+              </p>
+            )}
+            {current.employeeRoles.map((r) => {
+              const totalCost = roleCostByYear(r).reduce((acc, v) => acc + v, 0);
+              const peakHeadcount = Math.max(0, ...Object.values(r.headcountByYear));
+              return (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setSelectedRoleId(r.id)}
+                  className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                    r.id === role?.id
+                      ? 'border-primary bg-accent'
+                      : 'hover:bg-accent/50 border-transparent'
+                  }`}
+                >
+                  <div>
+                    <p className="font-medium">{r.title || 'Untitled Role'}</p>
+                    <p className="text-muted-foreground text-xs">
+                      {formatCurrency(r.annualSalary)}/yr salary · {formatPercent(r.benefitsPct, 0)}{' '}
+                      benefits · peak {peakHeadcount} FTE
+                    </p>
+                  </div>
+                  <span className="text-muted-foreground tabular-nums">
+                    {formatCurrency(totalCost)} total
+                  </span>
+                </button>
+              );
+            })}
+            {current.employeeRoles.length > 0 && (
+              <div className="mt-1 flex items-center justify-between border-t pt-2 text-sm font-semibold">
+                <span>Total Payroll &amp; Benefits</span>
+                <span className="tabular-nums">
+                  {formatCurrency(totalCostByYear.reduce((acc, v) => acc + v, 0))}
+                </span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>{role ? 'Edit Role' : 'No Role Selected'}</CardTitle>
+            {role && (
+              <Button size="sm" variant="outline" onClick={() => removeEmployeeRole(role.id)}>
+                <Trash2 />
+                Remove
+              </Button>
+            )}
+          </CardHeader>
+          {role && (
+            <CardContent className="grid gap-4">
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Role Title</Label>
+                <Input
+                  value={role.title}
+                  onChange={(e) => updateEmployeeRole(role.id, { title: e.target.value })}
+                />
+              </div>
+
+              <SliderInput
+                label="Annual Salary (per FTE)"
+                value={role.annualSalary}
+                onChange={(v) => updateEmployeeRole(role.id, { annualSalary: v })}
+                min={0}
+                max={300_000}
+                step={2_500}
+                formatValue={(v) => formatCurrency(v)}
+              />
+
+              <SliderInput
+                label="Benefits (% of salary)"
+                value={role.benefitsPct}
+                onChange={(v) => updateEmployeeRole(role.id, { benefitsPct: v })}
+                min={0}
+                max={0.5}
+                step={0.01}
+                formatValue={(v) => formatPercent(v, 0)}
+              />
+
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Headcount by Year</Label>
+                <p className="text-muted-foreground text-xs">
+                  Number of people in this role each year — 0 (or blank) before it's hired.
+                </p>
+                <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
+                  {years.map((year) => (
+                    <div key={year} className="grid gap-1">
+                      <span className="text-muted-foreground text-[11px]">Yr {year}</span>
+                      <Input
+                        className="h-8 text-xs"
+                        value={String(role.headcountByYear[year] ?? 0)}
+                        onChange={(e) => {
+                          const num = Number(e.target.value.replace(/[^0-9]/g, ''));
+                          if (!Number.isNaN(num)) setRoleHeadcount(role.id, year, num);
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>All Roles by Year (Fully-Loaded Cost)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <RolesByYearTable
+            roles={current.employeeRoles}
+            years={years}
+            totalByYear={totalCostByYear}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function RolesByYearTable({
+  roles,
+  years,
+  totalByYear,
+}: {
+  roles: { id: string; title: string; annualSalary: number; benefitsPct: number; headcountByYear: Record<number, number> }[];
+  years: number[];
+  totalByYear: number[];
+}) {
+  interface Row {
+    label: string;
+    isTotal?: boolean;
+    values: number[];
+  }
+
+  const rows: Row[] = roles.map((r) => ({
+    label: r.title || 'Untitled Role',
+    values: years.map((year) => computeRoleAnnualCost(r, year)),
+  }));
+  rows.push({ label: 'Total Payroll & Benefits (from Roles)', isTotal: true, values: totalByYear });
+
+  const columns: DataTableColumn<Row>[] = [
+    { key: 'label', header: 'Role', render: (r) => r.label },
+    ...years.map((year, idx) => ({
+      key: `y${year}`,
+      header: `Y${year}`,
+      align: 'right' as const,
+      render: (r: Row) => formatCurrency(r.values[idx]),
+    })),
+  ];
+
+  return (
+    <DataTable
+      columns={columns}
+      data={rows}
+      getRowKey={(r) => r.label}
+      rowClassName={(r) => (r.isTotal ? 'bg-h2mb-navy/90 text-white font-semibold hover:bg-h2mb-navy/90' : undefined)}
+    />
   );
 }
 
@@ -570,12 +789,14 @@ function ExpenseByYearTable({
   revenueByYear,
   totalByYear,
   totalLabel,
+  extraRow,
 }: {
   items: (ExpenseLineItem | CapexLineItem)[];
   years: number[];
   revenueByYear: Map<number, number>;
   totalByYear: number[];
   totalLabel: string;
+  extraRow?: { label: string; values: number[] };
 }) {
   interface Row {
     label: string;
@@ -587,6 +808,7 @@ function ExpenseByYearTable({
     label: item.name || 'Untitled',
     values: years.map((year) => resolveLineItemAnnualAmount(item, year, revenueByYear.get(year) ?? 0)),
   }));
+  if (extraRow) rows.push(extraRow);
   rows.push({ label: totalLabel, isTotal: true, values: totalByYear });
 
   const columns: DataTableColumn<Row>[] = [

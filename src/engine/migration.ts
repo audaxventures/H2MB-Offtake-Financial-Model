@@ -193,6 +193,7 @@ function convertLegacyScenario(raw: LegacyScenario): Scenario {
     revenueStreams: [revenueStream],
     expenseLineItems: [expenseLineItem],
     capexLineItems: synthesizeCapexLineItems(raw.construction),
+    employeeRoles: [],
   };
 }
 
@@ -229,6 +230,10 @@ function backfillCurrentShape(raw: Scenario): Scenario {
     expenseLineItems: (raw.expenseLineItems ?? []).map((item) => ({
       ...item,
       yearOverrides: item.yearOverrides ?? {},
+    })),
+    employeeRoles: (raw.employeeRoles ?? []).map((role) => ({
+      ...role,
+      headcountByYear: role.headcountByYear ?? {},
     })),
   };
 }

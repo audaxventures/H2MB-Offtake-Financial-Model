@@ -9,6 +9,7 @@ import type {
   CapexLineItem,
   CapitalStructure,
   ConstructionCosts,
+  EmployeeRole,
   ExpenseLineItem,
   ITCSettings,
   ModelSettings,
@@ -43,6 +44,10 @@ function deepCopyScenario(scenario: Scenario): Scenario {
       ...item,
       escalation: { ...item.escalation },
       yearOverrides: { ...item.yearOverrides },
+    })),
+    employeeRoles: scenario.employeeRoles.map((role) => ({
+      ...role,
+      headcountByYear: { ...role.headcountByYear },
     })),
   };
 }
@@ -124,6 +129,16 @@ function createBlankCapexLineItem(): CapexLineItem {
   };
 }
 
+function createBlankEmployeeRole(): EmployeeRole {
+  return {
+    id: generateId(),
+    title: 'New Role',
+    annualSalary: 70_000,
+    benefitsPct: 0.2,
+    headcountByYear: { 2: 1 },
+  };
+}
+
 interface ScenarioStoreState {
   current: Scenario;
   savedScenarios: Scenario[];
@@ -164,6 +179,14 @@ interface ScenarioStoreState {
     patch: Partial<Omit<CapexLineItem, 'id' | 'yearOverrides'>>,
   ) => void;
   setCapexLineItemYearOverride: (itemId: string, year: number, value: number | undefined) => void;
+
+  addEmployeeRole: () => void;
+  removeEmployeeRole: (roleId: string) => void;
+  updateEmployeeRole: (
+    roleId: string,
+    patch: Partial<Omit<EmployeeRole, 'id' | 'headcountByYear'>>,
+  ) => void;
+  setRoleHeadcount: (roleId: string, year: number, headcount: number | undefined) => void;
 
   setCurrentName: (name: string) => void;
   replaceCurrent: (scenario: Scenario) => void;
@@ -353,6 +376,49 @@ export const useScenarioStore = create<ScenarioStoreState>()(
                 yearOverrides[year] = value;
               }
               return { ...i, yearOverrides };
+            }),
+          },
+        })),
+
+      addEmployeeRole: () =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            employeeRoles: [...state.current.employeeRoles, createBlankEmployeeRole()],
+          },
+        })),
+
+      removeEmployeeRole: (roleId) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            employeeRoles: state.current.employeeRoles.filter((r) => r.id !== roleId),
+          },
+        })),
+
+      updateEmployeeRole: (roleId, patch) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            employeeRoles: state.current.employeeRoles.map((r) =>
+              r.id === roleId ? { ...r, ...patch } : r,
+            ),
+          },
+        })),
+
+      setRoleHeadcount: (roleId, year, headcount) =>
+        set((state) => ({
+          current: {
+            ...state.current,
+            employeeRoles: state.current.employeeRoles.map((r) => {
+              if (r.id !== roleId) return r;
+              const headcountByYear = { ...r.headcountByYear };
+              if (headcount === undefined) {
+                delete headcountByYear[year];
+              } else {
+                headcountByYear[year] = headcount;
+              }
+              return { ...r, headcountByYear };
             }),
           },
         })),

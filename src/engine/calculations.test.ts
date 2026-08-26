@@ -12,7 +12,9 @@ import {
   computeMaxDailyCapacityKg,
   computeMinDSCR,
   computeModelPeriods,
+  computePayrollFromRoles,
   computeRevenueByYear,
+  computeRoleAnnualCost,
   computeSourcesAndUses,
   computeTotalCapex,
   findITCPeriodIndex,
@@ -28,7 +30,7 @@ import {
   validateScenario,
 } from './calculations';
 import { createDefaultScenario } from './defaults';
-import type { ExpenseLineItem, RevenueStream, Scenario } from './types';
+import type { EmployeeRole, ExpenseLineItem, RevenueStream, Scenario } from './types';
 
 describe('period timeline', () => {
   it('generates 4 quarters/year for quarterlyYears, then 1 annual period/year through totalYears', () => {
@@ -558,6 +560,55 @@ describe('CapEx line items (phased construction spending)', () => {
       expect(a.cumulativeCapexSpend).toBeLessThanOrEqual(totalCapex + 1e-6);
     }
     expect(annual[annual.length - 1].cumulativeCapexSpend).toBeCloseTo(totalCapex, 6);
+  });
+});
+
+describe('Employee Roles (headcount-based payroll)', () => {
+  const role: EmployeeRole = {
+    id: 'r1',
+    title: 'Plant Manager',
+    annualSalary: 100_000,
+    benefitsPct: 0.2,
+    headcountByYear: { 2: 1, 3: 2 },
+  };
+
+  it('computes a role\'s fully-loaded annual cost as headcount × salary × (1 + benefits%)', () => {
+    expect(computeRoleAnnualCost(role, 2)).toBeCloseTo(1 * 100_000 * 1.2, 6);
+    expect(computeRoleAnnualCost(role, 3)).toBeCloseTo(2 * 100_000 * 1.2, 6);
+  });
+
+  it('treats a year with no headcount entry as zero cost', () => {
+    expect(computeRoleAnnualCost(role, 1)).toBe(0);
+    expect(computeRoleAnnualCost(role, 10)).toBe(0);
+  });
+
+  it('sums fully-loaded cost across all roles for a given year', () => {
+    const role2: EmployeeRole = { ...role, id: 'r2', annualSalary: 60_000, benefitsPct: 0.1, headcountByYear: { 2: 3 } };
+    const total = computePayrollFromRoles([role, role2], 2);
+    expect(total).toBeCloseTo(1 * 100_000 * 1.2 + 3 * 60_000 * 1.1, 6);
+  });
+
+  it('rolls headcount-based payroll into the payroll expense category, additive with manual payroll line items', () => {
+    const scenario = createDefaultScenario();
+    scenario.employeeRoles = [role];
+    const periods = computeModelPeriods(scenario);
+    const annual = computeAnnualSummary(scenario, periods);
+
+    const year2 = annual.find((a) => a.year === 2)!;
+    const manualPayrollY2 = scenario.expenseLineItems
+      .filter((i) => i.category === 'payroll')
+      .reduce((acc, item) => acc + resolveLineItemAnnualAmount(item, 2, year2.revenue), 0);
+    const expectedPayroll = manualPayrollY2 + computeRoleAnnualCost(role, 2);
+    expect(year2.expensesByCategory.payroll).toBeCloseTo(expectedPayroll, 6);
+  });
+
+  it('applies role-based payroll even inside a construction period, same as other expense line items', () => {
+    const scenario = createDefaultScenario();
+    scenario.employeeRoles = [{ ...role, headcountByYear: { 1: 1 } }];
+    const periods = computeModelPeriods(scenario);
+    const y1q1 = periods.find((p) => p.label === 'Y1Q1')!;
+    expect(y1q1.isConstruction).toBe(true);
+    expect(y1q1.expensesByCategory.payroll).toBeCloseTo((100_000 * 1.2) / 4, 6);
   });
 });
 

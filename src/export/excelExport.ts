@@ -150,6 +150,25 @@ function buildAssumptionsSheet(scenario: Scenario): XLSX.WorkSheet {
     rows.push([cell('  Start Year'), cell(item.startYear, inputStyle, '0')]);
   }
 
+  if (scenario.employeeRoles.length > 0) {
+    rows.push([]);
+    section('Employee Roles (Payroll & Benefits)');
+    for (const role of scenario.employeeRoles) {
+      rows.push([
+        cell(role.title, boldStyle),
+        cell(
+          `$${role.annualSalary.toLocaleString('en-CA')} salary · ${(role.benefitsPct * 100).toFixed(0)}% benefits`,
+        ),
+      ]);
+      const headcountByYear = Object.entries(role.headcountByYear)
+        .filter(([, count]) => count > 0)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([year, count]) => `Y${year}: ${count}`)
+        .join(', ');
+      rows.push([cell('  Headcount by Year'), cell(headcountByYear || '—')]);
+    }
+  }
+
   return buildSheet(rows, [34, 26]);
 }
 
@@ -220,10 +239,16 @@ function buildAnnualSheet(scenario: Scenario, outputs: ModelOutputs): XLSX.WorkS
       ...values.map((v) => cell(v ?? '', style, numFmt)),
     ]);
 
+  // Scan both the line items AND the computed per-period breakdown — a
+  // category can be populated purely via Employee Roles (payroll) with no
+  // matching ExpenseLineItem, and would otherwise be silently dropped here.
   const usedCategories = Array.from(
-    new Set(
-      scenario.expenseLineItems.filter((i) => i.category !== 'cogs').map((i) => i.category),
-    ),
+    new Set([
+      ...scenario.expenseLineItems.filter((i) => i.category !== 'cogs').map((i) => i.category),
+      ...outputs.annual.flatMap(
+        (a) => Object.keys(a.expensesByCategory).filter((c) => c !== 'cogs') as ExpenseCategory[],
+      ),
+    ]),
   );
   const usedCapexCategories = Array.from(new Set(scenario.capexLineItems.map((i) => i.category)));
 

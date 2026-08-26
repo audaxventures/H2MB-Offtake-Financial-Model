@@ -1,6 +1,7 @@
 import type {
   AnnualResult,
   CapexCategory,
+  EmployeeRole,
   EscalatedLineItem,
   EscalationConfig,
   ExpenseCategory,
@@ -184,6 +185,21 @@ export function resolveLineItemAnnualAmount(
   }
 }
 
+/** Headcount for a role in a given year (0 where not yet hired / not entered). */
+export function roleHeadcountForYear(role: EmployeeRole, year: number): number {
+  return role.headcountByYear[year] ?? 0;
+}
+
+/** A role's fully-loaded annual cost in a given year: headcount × salary × (1 + benefits%). */
+export function computeRoleAnnualCost(role: EmployeeRole, year: number): number {
+  return roleHeadcountForYear(role, year) * role.annualSalary * (1 + role.benefitsPct);
+}
+
+/** Total fully-loaded payroll cost across all employee roles in a given year. */
+export function computePayrollFromRoles(roles: EmployeeRole[], year: number): number {
+  return sum(roles.map((r) => computeRoleAnnualCost(r, year)));
+}
+
 /**
  * The period (in timeline order) in which the ITC is received. When
  * receivedInQuarter is set and receivedInYear falls within the quarterly
@@ -260,7 +276,7 @@ export function computeModelPeriods(
   scenario: Scenario,
   itcOverrideAmount?: number,
 ): PeriodResult[] {
-  const { capital, construction, itc, revenueStreams, expenseLineItems, capexLineItems } = scenario;
+  const { capital, construction, itc, revenueStreams, expenseLineItems, capexLineItems, employeeRoles } = scenario;
   const periods = buildPeriods(scenario);
   const itcAmount = itcOverrideAmount ?? itc.amount;
   const itcPeriodIndex = findITCPeriodIndex(periods, itc.receivedInYear, itc.receivedInQuarter);
@@ -299,6 +315,13 @@ export function computeModelPeriods(
       if (annualAmount === 0) continue;
       const periodAmount = annualAmount * period.periodFraction;
       expensesByCategory[item.category] = (expensesByCategory[item.category] ?? 0) + periodAmount;
+    }
+    // Headcount-based payroll (from Employee Roles) adds to the 'payroll'
+    // category alongside any manual payroll expense line items.
+    const roleAnnualPayroll = computePayrollFromRoles(employeeRoles, period.year);
+    if (roleAnnualPayroll !== 0) {
+      const periodAmount = roleAnnualPayroll * period.periodFraction;
+      expensesByCategory.payroll = (expensesByCategory.payroll ?? 0) + periodAmount;
     }
 
     const cogsFromLineItems = expensesByCategory.cogs ?? 0;
